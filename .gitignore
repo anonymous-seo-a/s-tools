@@ -24,3 +24,5 @@ dist/
 node/data/gap-fill-results.json
 node/data/apply-history.json
 node/data/backups/
+node/data/monitor.db
+node/data/monitor.db-*

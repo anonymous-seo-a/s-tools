@@ -3,6 +3,9 @@ const cors = require('cors');
 const path = require('path');
 const config = require('./config');
 const store = require('./store');
+const monitorDb = require('./monitor-db');
+const monitorJobs = require('./monitor-jobs');
+const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -1003,6 +1006,84 @@ app.post('/api/link-replacer/apply', async (req, res) => {
   res.json({ applied, errors });
 });
 
+// ============================================================
+// 順位モニタリング API
+// ============================================================
+app.get('/api/monitor/status', (req, res) => {
+  try {
+    const latest = monitorDb.getLatestDate();
+    const articleCount = monitorDb.getArticleCount();
+    const metricsCount = monitorDb.getMetricsRowCount();
+    const backfill = monitorDb.getBackfillProgress('main');
+    const recentJobs = monitorDb.listJobs(10);
+    res.json({ latest, articleCount, metricsCount, backfill, recentJobs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/monitor/articles', (req, res) => {
+  try {
+    res.json(monitorDb.getListView());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/monitor/articles/:postId/timeline', (req, res) => {
+  try {
+    const days = parseInt(req.query.days, 10) || 90;
+    const rows = monitorDb.getArticleTimeline(parseInt(req.params.postId, 10), days);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/monitor/refresh', async (req, res) => {
+  try {
+    const result = await monitorJobs.runDailyJob();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/monitor/backfill/start', async (req, res) => {
+  try {
+    const r = await monitorJobs.startBackfill();
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/monitor/kw-snapshot', async (req, res) => {
+  try {
+    const result = await monitorJobs.runWeeklyKwSnapshot();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/monitor/wp-meta', async (req, res) => {
+  try {
+    const r = await monitorJobs.backfillWpMeta();
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/monitor/jobs', (req, res) => {
+  try {
+    res.json(monitorDb.listJobs(parseInt(req.query.limit, 10) || 50));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // React SPA フォールバック
 app.get('/{0,}', (req, res) => {
   res.sendFile(path.join(__dirname, 'client/dist/index.html'));
@@ -1011,4 +1092,40 @@ app.get('/{0,}', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`CTA Gap Fill Server: http://localhost:${PORT}`);
+
+  // モニタリング DB 初期化（ファイル未作成なら作成）
+  try {
+    monitorDb.getDB();
+    const metricsCount = monitorDb.getMetricsRowCount();
+    console.log(`[monitor] DB ready (daily_metrics: ${metricsCount} rows)`);
+
+    // 初回起動: メトリクスが空ならバックフィル自動開始（stage 1 = 30日分）
+    if (metricsCount === 0) {
+      console.log('[monitor] empty DB detected, auto-starting staged backfill');
+      monitorJobs.startBackfill();
+      // WP メタデータ埋めは backfill Stage 1 完了後にバックグラウンドで走らせる
+      setTimeout(() => {
+        monitorJobs.backfillWpMeta().catch(e => console.warn('[monitor] wp_meta: ' + e.message));
+      }, 60_000);
+    }
+  } catch (e) {
+    console.error('[monitor] init failed: ' + e.message);
+  }
+
+  // cron 登録
+  if (process.env.DISABLE_CRON !== '1') {
+    // 毎日 JST 06:00 = UTC 21:00
+    cron.schedule('0 21 * * *', async () => {
+      try { await monitorJobs.runDailyJob(); }
+      catch (e) { console.error('[cron daily] ' + e.message); }
+    }, { timezone: 'UTC' });
+
+    // 毎週月曜 JST 07:00 = 月曜 UTC 22:00
+    cron.schedule('0 22 * * 1', async () => {
+      try { await monitorJobs.runWeeklyKwSnapshot(); }
+      catch (e) { console.error('[cron kw-weekly] ' + e.message); }
+    }, { timezone: 'UTC' });
+
+    console.log('[monitor] cron registered (daily 06:00 JST, kw-weekly Mon 07:00 JST)');
+  }
 });

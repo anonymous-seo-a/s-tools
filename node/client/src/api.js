@@ -64,4 +64,14 @@ export const api = {
 
   deletePartner: (category, slug) =>
     request(`/api/partners/${category}/${slug}`, { method: 'DELETE' }),
+
+  // 順位モニタリング
+  getMonitorStatus: () => request('/api/monitor/status'),
+  getMonitorArticles: () => request('/api/monitor/articles'),
+  getMonitorTimeline: (postId, days = 90) => request(`/api/monitor/articles/${postId}/timeline?days=${days}`),
+  refreshMonitor: () => request('/api/monitor/refresh', { method: 'POST' }),
+  startMonitorBackfill: () => request('/api/monitor/backfill/start', { method: 'POST' }),
+  runKwSnapshot: () => request('/api/monitor/kw-snapshot', { method: 'POST' }),
+  runWpMetaBackfill: () => request('/api/monitor/wp-meta', { method: 'POST' }),
+  getMonitorJobs: (limit = 20) => request(`/api/monitor/jobs?limit=${limit}`),
 };
