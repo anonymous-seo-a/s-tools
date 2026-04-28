@@ -82,4 +82,32 @@ export const api = {
   runKwSnapshot: () => request('/api/monitor/kw-snapshot', { method: 'POST' }),
   runWpMetaBackfill: () => request('/api/monitor/wp-meta', { method: 'POST' }),
   getMonitorJobs: (limit = 20) => request(`/api/monitor/jobs?limit=${limit}`),
+
+  // ============================================================
+  // SEO リライトシステム — マスター管理 API
+  // ============================================================
+  listAnnotations: (params = {}) => request(`/api/masters/annotations?${new URLSearchParams(params)}`),
+  getAnnotation: (id) => request(`/api/masters/annotations/${id}`),
+  createAnnotation: (body) => request('/api/masters/annotations', { method: 'POST', body: JSON.stringify(body) }),
+  updateAnnotation: (id, body) => request(`/api/masters/annotations/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteAnnotation: (id) => request(`/api/masters/annotations/${id}`, { method: 'DELETE' }),
+
+  listRules: (params = {}) => request(`/api/masters/rules?${new URLSearchParams(params)}`),
+  getRule: (id) => request(`/api/masters/rules/${id}`),
+  createRule: (body) => request('/api/masters/rules', { method: 'POST', body: JSON.stringify(body) }),
+  updateRule: (id, body) => request(`/api/masters/rules/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteRule: (id) => request(`/api/masters/rules/${id}`, { method: 'DELETE' }),
+
+  listChecklist: (params = {}) => request(`/api/masters/checklist?${new URLSearchParams(params)}`),
+  updateChecklistItem: (id, body) => request(`/api/masters/checklist/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+
+  listAuditLog: (params = {}) => request(`/api/masters/audit-log?${new URLSearchParams(params)}`),
+  getCompletenessSummary: () => request('/api/masters/completeness-summary'),
+
+  importMasters: (table, rows) =>
+    request('/api/masters/import', { method: 'POST', body: JSON.stringify({ table, rows }) }),
+  exportMastersUrl: (table, params = {}) => {
+    const qs = new URLSearchParams({ table, ...params });
+    return `${BASE}/api/masters/export?${qs}`;
+  },
 };

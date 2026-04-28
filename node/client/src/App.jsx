@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
 import MonitorView from './MonitorView';
+import MastersView from './masters/MastersView';
 
 function Toast({ message, type, onClose }) {
   useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
@@ -1013,6 +1014,7 @@ export default function App() {
           <button className={page === 'partners' ? 'active' : ''} onClick={() => setPage('partners')}>商材</button>
           <button className={page === 'tools' ? 'active' : ''} onClick={() => setPage('tools')}>ツール</button>
           <button className={page === 'monitor' ? 'active' : ''} onClick={() => setPage('monitor')}>順位モニタリング</button>
+          <button className={page === 'masters' ? 'active' : ''} onClick={() => setPage('masters')}>マスター</button>
           <button onClick={() => setShowRunModal(true)}>Gap Fill 実行</button>
         </div>
       </div>
@@ -1098,6 +1100,8 @@ export default function App() {
         {page === 'tools' && <LinkReplacerView showToast={showToast} />}
 
         {page === 'monitor' && <MonitorView showToast={showToast} />}
+
+        {page === 'masters' && <MastersView showToast={showToast} />}
       </div>
 
       {showRunModal && <RunModal onClose={() => setShowRunModal(false)} onRun={handleRun} onStop={async () => { try { await api.stopGapFill(); showToast('停止リクエスト送信'); } catch (e) { showToast(e.message, 'error'); } }} />}

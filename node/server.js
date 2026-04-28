@@ -5,6 +5,8 @@ const config = require('./config');
 const store = require('./store');
 const monitorDb = require('./monitor-db');
 const monitorJobs = require('./monitor-jobs');
+const masterDb = require('./master-db');
+const mastersRoutes = require('./masters-routes');
 const cron = require('node-cron');
 
 const app = express();
@@ -13,6 +15,9 @@ app.use(express.json({ limit: '50mb' }));
 
 // React ビルド済みファイルを配信（本番用）
 app.use(express.static(path.join(__dirname, 'client/dist')));
+
+// マスター管理 API（Phase E）
+app.use('/api/masters', mastersRoutes);
 
 // ============================================================
 // Gap Fill コアロジック（gap-fill.js から関数を再利用）
@@ -1233,6 +1238,13 @@ app.listen(PORT, () => {
     monitorDb.getDB();
     const metricsCount = monitorDb.getMetricsRowCount();
     console.log(`[monitor] DB ready (daily_metrics: ${metricsCount} rows)`);
+
+    // マスターテーブル初期化 + 92 件シード（idempotent）
+    masterDb.getDB();
+    const annTotal = masterDb.listAnnotations({ limit: 1 }).total;
+    const ruleTotal = masterDb.listRules({ limit: 1 }).total;
+    const checkTotal = masterDb.listChecklist().length;
+    console.log(`[masters] DB ready (annotations: ${annTotal}, rules: ${ruleTotal}, checklist: ${checkTotal})`);
 
     // 初回起動: メトリクスが空ならバックフィル自動開始（stage 1 = 30日分）
     if (metricsCount === 0) {
