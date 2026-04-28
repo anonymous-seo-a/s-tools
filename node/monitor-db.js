@@ -110,6 +110,24 @@ function initSchema(d) {
       status        TEXT,
       updated_at    TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS daily_scraped_rank (
+      post_id  INTEGER NOT NULL,
+      date     TEXT NOT NULL,
+      engine   TEXT NOT NULL,
+      keyword  TEXT NOT NULL,
+      rank     INTEGER,
+      note     TEXT,
+      PRIMARY KEY (post_id, date, engine, keyword)
+    );
+    CREATE INDEX IF NOT EXISTS idx_dsr_date ON daily_scraped_rank(date);
+    CREATE INDEX IF NOT EXISTS idx_dsr_post ON daily_scraped_rank(post_id);
+
+    CREATE TABLE IF NOT EXISTS kv_settings (
+      key      TEXT PRIMARY KEY,
+      value    TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -350,17 +368,227 @@ function getListView() {
     WHERE post_id = ? AND date BETWEEN ? AND ? AND source = 'gsc_ga4'
   `);
 
-  const result = articles.map(a => ({
-    ...a,
-    latest: getMetrics.get(a.post_id, latestDate) || null,
-    prev1: getMetrics.get(a.post_id, prev1Date) || null,
-    avg7: getAvg.get(a.post_id, avg7Start, latestDate) || null,
-    avg7_prev: getAvg.get(a.post_id, avg7PrevStart, avg7PrevEnd) || null,
-    avg30: getAvg.get(a.post_id, avg30Start, latestDate) || null,
-    avg30_prev: getAvg.get(a.post_id, avg30PrevStart, avg30PrevEnd) || null,
-  }));
+  const kwDrift = getKwDriftMap(3);
+
+  const result = articles.map(a => {
+    const drift = kwDrift.get(a.post_id) || null;
+    return {
+      ...a,
+      latest: getMetrics.get(a.post_id, latestDate) || null,
+      prev1: getMetrics.get(a.post_id, prev1Date) || null,
+      avg7: getAvg.get(a.post_id, avg7Start, latestDate) || null,
+      avg7_prev: getAvg.get(a.post_id, avg7PrevStart, avg7PrevEnd) || null,
+      avg30: getAvg.get(a.post_id, avg30Start, latestDate) || null,
+      avg30_prev: getAvg.get(a.post_id, avg30PrevStart, avg30PrevEnd) || null,
+      kw_drift: drift ? {
+        jaccard: drift.jaccard,
+        curr_week: drift.curr_week,
+        prev_week: drift.prev_week,
+        curr_kw: drift.curr_kw,
+        prev_kw: drift.prev_kw,
+      } : null,
+    };
+  });
 
   return { latest: latestDate, articles: result };
+}
+
+/**
+ * KW drift: 最新週と1つ前の週の weekly_kw_snapshot で Top N KW 集合を
+ * Jaccard 類似度で比較し、post_id → { jaccard, curr_week, prev_week, curr_kw, prev_kw } を返す。
+ * 1週分しか無い post_id は Map に含まれない（= UI で「—」表示）。
+ */
+function getKwDriftMap(topN = 3) {
+  const d = getDB();
+  const weeks = d.prepare(
+    'SELECT DISTINCT week_start FROM weekly_kw_snapshot ORDER BY week_start DESC LIMIT 2'
+  ).all();
+  if (weeks.length < 2) return new Map();
+  const [curr, prev] = weeks.map(w => w.week_start);
+  const rows = d.prepare(`
+    SELECT post_id, week_start, keyword
+    FROM weekly_kw_snapshot
+    WHERE week_start IN (?, ?) AND rank_order <= ?
+  `).all(curr, prev, topN);
+
+  const byPost = new Map();
+  for (const r of rows) {
+    if (!byPost.has(r.post_id)) byPost.set(r.post_id, { a: new Set(), b: new Set() });
+    const bucket = byPost.get(r.post_id);
+    (r.week_start === curr ? bucket.a : bucket.b).add(r.keyword);
+  }
+
+  const result = new Map();
+  for (const [post_id, { a, b }] of byPost) {
+    if (a.size === 0 || b.size === 0) continue;
+    let inter = 0;
+    for (const k of a) if (b.has(k)) inter++;
+    const union = a.size + b.size - inter;
+    const jaccard = union === 0 ? null : inter / union;
+    result.set(post_id, {
+      jaccard,
+      curr_week: curr,
+      prev_week: prev,
+      curr_kw: [...a],
+      prev_kw: [...b],
+    });
+  }
+  return result;
+}
+
+/**
+ * 記事の weekly_kw_snapshot を全週返す。
+ * 返り値: { weeks: ['2026-04-06','2026-04-13',...], keywords: { [kw]: { [week]: {rank_order, rank, click, impressions} } } }
+ * keywords は週あたりの最小 rank_order を優先して並べる（より上位に来た順）
+ */
+function getArticleKwHistory(post_id, topN = 10) {
+  const d = getDB();
+  const rows = d.prepare(`
+    SELECT week_start, rank_order, keyword, rank, click, impressions
+    FROM weekly_kw_snapshot
+    WHERE post_id = ? AND rank_order <= ?
+    ORDER BY week_start ASC, rank_order ASC
+  `).all(post_id, topN);
+  if (rows.length === 0) return { weeks: [], keywords: [] };
+
+  const weekSet = new Set();
+  const kwMap = new Map(); // keyword → { bestRank, cells: { [week]: {...} } }
+  for (const r of rows) {
+    weekSet.add(r.week_start);
+    if (!kwMap.has(r.keyword)) kwMap.set(r.keyword, { keyword: r.keyword, bestRank: r.rank_order, cells: {} });
+    const entry = kwMap.get(r.keyword);
+    if (r.rank_order < entry.bestRank) entry.bestRank = r.rank_order;
+    entry.cells[r.week_start] = {
+      rank_order: r.rank_order, rank: r.rank, click: r.click, impressions: r.impressions,
+    };
+  }
+  const weeks = [...weekSet].sort();
+  // 最新週で上位 → 過去最上位の順
+  const latestWeek = weeks[weeks.length - 1];
+  const keywords = [...kwMap.values()].sort((a, b) => {
+    const ra = a.cells[latestWeek]?.rank_order ?? 999;
+    const rb = b.cells[latestWeek]?.rank_order ?? 999;
+    if (ra !== rb) return ra - rb;
+    return a.bestRank - b.bestRank;
+  });
+  return { weeks, keywords };
+}
+
+/**
+ * Top1 KW の週別推移。変動があった週（前週と KW が異なる週）だけを抽出して返す。
+ * 返り値: [{ date: week_start, from: prev_kw|null, to: keyword, rank }]
+ * 最初の週は from=null で「初出」として扱う。
+ */
+function getTopKwChanges(post_id) {
+  const d = getDB();
+  const rows = d.prepare(`
+    SELECT week_start, keyword, rank
+    FROM weekly_kw_snapshot
+    WHERE post_id = ? AND rank_order = 1
+    ORDER BY week_start ASC
+  `).all(post_id);
+  const changes = [];
+  let prev = null;
+  for (const r of rows) {
+    if (!prev || prev.keyword !== r.keyword) {
+      changes.push({ date: r.week_start, from: prev?.keyword || null, to: r.keyword, rank: r.rank });
+    }
+    prev = r;
+  }
+  return changes;
+}
+
+/**
+ * 記事の商材別 aff_click 内訳を返す。
+ * partners: [{partner, total, daily: [{date, clicks}]}]  (total 降順)
+ */
+function getArticleAffiliateBreakdown(post_id, days = 90) {
+  const d = getDB();
+  const latestRow = d.prepare(`SELECT MAX(date) AS max_date FROM daily_metrics`).get();
+  if (!latestRow || !latestRow.max_date) return { start: null, end: null, partners: [] };
+  const end = latestRow.max_date;
+  const start = addDaysISO(end, -(days - 1));
+  const rows = d.prepare(`
+    SELECT partner, date, clicks
+    FROM daily_affiliate_clicks
+    WHERE post_id = ? AND date BETWEEN ? AND ?
+    ORDER BY partner ASC, date ASC
+  `).all(post_id, start, end);
+  if (rows.length === 0) return { start, end, partners: [] };
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.partner)) map.set(r.partner, { partner: r.partner, total: 0, daily: [] });
+    const e = map.get(r.partner);
+    e.total += r.clicks;
+    e.daily.push({ date: r.date, clicks: r.clicks });
+  }
+  const partners = [...map.values()].sort((a, b) => b.total - a.total);
+  return { start, end, partners };
+}
+
+// ============================================================
+// daily_scraped_rank
+// ============================================================
+function upsertScrapedRank({ post_id, date, engine, keyword, rank, note }) {
+  getDB().prepare(`
+    INSERT INTO daily_scraped_rank (post_id, date, engine, keyword, rank, note)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(post_id, date, engine, keyword) DO UPDATE SET
+      rank = excluded.rank,
+      note = excluded.note
+  `).run(post_id, date, engine, keyword, rank ?? null, note || null);
+}
+
+function getScrapedRankTimeline(post_id, engine = 'yahoo', days = 90) {
+  const d = getDB();
+  const latestRow = d.prepare(`SELECT MAX(date) AS max_date FROM daily_scraped_rank WHERE post_id = ? AND engine = ?`).get(post_id, engine);
+  if (!latestRow || !latestRow.max_date) return [];
+  const metricsLatest = d.prepare(`SELECT MAX(date) AS max_date FROM daily_metrics`).get();
+  const pivot = metricsLatest?.max_date || latestRow.max_date;
+  const start = addDaysISO(pivot, -(days - 1));
+  return d.prepare(`
+    SELECT date, engine, keyword, rank
+    FROM daily_scraped_rank
+    WHERE post_id = ? AND engine = ? AND date >= ?
+    ORDER BY date ASC
+  `).all(post_id, engine, start);
+}
+
+// ============================================================
+// kv_settings
+// ============================================================
+function getSetting(key, fallback = null) {
+  const row = getDB().prepare('SELECT value FROM kv_settings WHERE key = ?').get(key);
+  if (!row) return fallback;
+  try { return JSON.parse(row.value); } catch { return row.value; }
+}
+function setSetting(key, value) {
+  getDB().prepare(`
+    INSERT INTO kv_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, JSON.stringify(value), new Date().toISOString());
+}
+
+/**
+ * PV 降順で Top N 記事 (post_id, top_kw) を返す。top_kw が null な記事は除外。
+ * 直近 N 日平均 PV で評価。
+ */
+function getTopArticlesByPv(limit = 200, lookbackDays = 30) {
+  const d = getDB();
+  const latestRow = d.prepare(`SELECT MAX(date) AS max_date FROM daily_metrics`).get();
+  if (!latestRow || !latestRow.max_date) return [];
+  const start = addDaysISO(latestRow.max_date, -(lookbackDays - 1));
+  return d.prepare(`
+    SELECT a.post_id, a.url, a.top_kw, AVG(m.pv) AS avg_pv
+    FROM articles a
+    JOIN daily_metrics m ON m.post_id = a.post_id AND m.date BETWEEN ? AND ?
+    WHERE a.top_kw IS NOT NULL AND a.top_kw != ''
+    GROUP BY a.post_id
+    HAVING avg_pv > 0
+    ORDER BY avg_pv DESC
+    LIMIT ?
+  `).all(start, latestRow.max_date, limit);
 }
 
 function getArticleTimeline(post_id, days = 90) {
@@ -413,7 +641,10 @@ module.exports = {
   // analysis
   saveAnalysisComment, getAnalysisComments,
   // queries
-  getListView, getArticleTimeline,
+  getListView, getArticleTimeline, getKwDriftMap, getArticleKwHistory, getTopKwChanges, getArticleAffiliateBreakdown,
+  // scraping
+  upsertScrapedRank, getScrapedRankTimeline, getTopArticlesByPv,
+  getSetting, setSetting,
   // stats
   getLatestDate, getArticleCount, getMetricsRowCount,
 };

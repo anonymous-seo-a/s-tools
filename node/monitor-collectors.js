@@ -28,14 +28,24 @@ function authClient() {
 // ============================================================
 const URL_PATH_REGEX = /\/no1\/news\/([a-z]+)\/(\d+)(?:\/|$)/i;
 
+// 本体サイト (soico.jp 本体) のカテゴリは /no1/ 配下でも affiliate 対象外
+// ユーザー指定リストの typo 吸収で 'entrepreneur' / 'grants' も含めている
+const EXCLUDED_CATEGORIES = new Set([
+  'accounting', 'development', 'enterpreneur', 'entrepreneur',
+  'funding', 'grantsh', 'grants',
+  'hiring', 'incorporation', 'office', 'startup',
+]);
+
 function parseUrl(url) {
   // pageLocation には FQDN を含む場合と含まない場合がある。両方対応
   if (!url) return null;
   const clean = url.split('?')[0].split('#')[0];
   const m = clean.match(URL_PATH_REGEX);
   if (!m) return null;
+  const category = m[1].toLowerCase();
+  if (EXCLUDED_CATEGORIES.has(category)) return null;
   return {
-    category: m[1].toLowerCase(),
+    category,
     post_id: parseInt(m[2], 10),
     normalizedPath: `/no1/news/${m[1]}/${m[2]}/`,
     normalizedUrl: `https://www.soico.jp/no1/news/${m[1]}/${m[2]}/`,
@@ -352,6 +362,33 @@ async function fetchWpMeta(postIds) {
   return out;
 }
 
+/**
+ * 1 記事の本文 (HTML) を WP REST から取得。要因分析用。
+ * Returns: { post_id, title, content_html, content_text } | null
+ */
+async function fetchWpContent(post_id) {
+  const auth = Buffer.from(`${config.wp.username}:${config.wp.appPassword}`).toString('base64');
+  const url = `${config.wp.restBase}/posts/${post_id}?_fields=id,title,content,link,modified`;
+  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+  if (!res.ok) return null;
+  const p = await res.json();
+  const html = p.content?.rendered || '';
+  const text = html.replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return {
+    post_id: p.id,
+    title: p.title?.rendered || '',
+    content_html: html,
+    content_text: text,
+    url: p.link,
+    modified: p.modified,
+  };
+}
+
 module.exports = {
   parseUrl,
   extractPartnerFromLinkUrl,
@@ -361,4 +398,5 @@ module.exports = {
   fetchGa4AffiliateClicks,
   fetchGa4AffiliateClicksByPartner,
   fetchWpMeta,
+  fetchWpContent,
 };

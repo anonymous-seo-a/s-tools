@@ -1030,11 +1030,146 @@ app.get('/api/monitor/articles', (req, res) => {
   }
 });
 
-app.get('/api/monitor/articles/:postId/timeline', (req, res) => {
+app.get('/api/monitor/articles/:postId/timeline', async (req, res) => {
   try {
+    const postId = parseInt(req.params.postId, 10);
     const days = parseInt(req.query.days, 10) || 90;
-    const rows = monitorDb.getArticleTimeline(parseInt(req.params.postId, 10), days);
-    res.json(rows);
+    const metrics = monitorDb.getArticleTimeline(postId, days);
+
+    // マーカー収集
+    const article = monitorDb.getArticle(postId);
+    const history = await store.getHistory();
+    const rangeStart = metrics.length > 0 ? metrics[0].date : null;
+
+    const applyHistory = history
+      .filter(h => String(h.postId) === String(postId))
+      .map(h => {
+        const date = (h.timestamp || '').slice(0, 10);
+        if (!date) return null;
+        if (rangeStart && date < rangeStart) return null;
+        let type, label;
+        if (h.action === 'link-replace') {
+          type = 'link_replace';
+          label = `リンク張替${h.partner ? `: ${h.partner}` : ''} ${h.replacedCount || ''}件`;
+        } else if (h.insertedCount || (h.items && h.items.length)) {
+          type = 'cta_insert';
+          label = `CTA挿入 ${h.insertedCount || h.items?.length || ''}件`;
+        } else {
+          type = 'other';
+          label = h.action || 'apply';
+        }
+        return { date, type, label, raw: h };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const wpModified = article?.wp_modified ? article.wp_modified.slice(0, 10) : null;
+
+    const scrapedYahoo = monitorDb.getScrapedRankTimeline(postId, 'yahoo', days);
+
+    const topKwChanges = monitorDb.getTopKwChanges(postId)
+      .filter(c => !rangeStart || c.date >= rangeStart);
+
+    res.json({
+      postId,
+      metrics,
+      markers: {
+        wp_modified: wpModified && (!rangeStart || wpModified >= rangeStart) ? wpModified : null,
+        apply_history: applyHistory,
+        top_kw_changes: topKwChanges,
+      },
+      scraped: { yahoo: scrapedYahoo },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==== Yahoo scraper ====
+app.get('/api/monitor/scraper/settings', (req, res) => {
+  try {
+    const s = monitorDb.getSetting('scraper', { enabled: false, limit: 200, intervalSec: 15 });
+    res.json(s);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/monitor/scraper/settings', (req, res) => {
+  try {
+    const curr = monitorDb.getSetting('scraper', { enabled: false, limit: 200, intervalSec: 15 });
+    const next = {
+      enabled: typeof req.body?.enabled === 'boolean' ? req.body.enabled : curr.enabled,
+      limit: Number.isFinite(+req.body?.limit) ? Math.max(1, Math.min(1000, +req.body.limit)) : curr.limit,
+      intervalSec: Number.isFinite(+req.body?.intervalSec) ? Math.max(5, Math.min(120, +req.body.intervalSec)) : curr.intervalSec,
+    };
+    monitorDb.setSetting('scraper', next);
+    res.json(next);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// バックグラウンド実行開始（長時間掛かるので即座に 202 で返す）
+let _scrapeStatus = null;
+app.post('/api/monitor/scraper/run', (req, res) => {
+  if (monitorDb.isJobRunning('yahoo_scrape')) return res.status(409).json({ error: 'already running' });
+  const settings = monitorDb.getSetting('scraper', { enabled: false, limit: 200, intervalSec: 15 });
+  const payload = {
+    limit: Number.isFinite(+req.body?.limit) ? +req.body.limit : settings.limit,
+    intervalSec: Number.isFinite(+req.body?.intervalSec) ? +req.body.intervalSec : settings.intervalSec,
+  };
+  _scrapeStatus = { started_at: new Date().toISOString(), ...payload, progress: null };
+  const scraper = require('./monitor-scraper');
+  scraper.runYahooDailyScrape({
+    ...payload,
+    onProgress: (p) => { _scrapeStatus = { ..._scrapeStatus, progress: p }; },
+  }).then(r => { _scrapeStatus = { ..._scrapeStatus, result: r, finished_at: new Date().toISOString() }; })
+    .catch(e => { _scrapeStatus = { ..._scrapeStatus, error: e.message, finished_at: new Date().toISOString() }; });
+  res.status(202).json({ started: true, ...payload });
+});
+
+app.get('/api/monitor/scraper/status', (req, res) => {
+  res.json({
+    running: monitorDb.isJobRunning('yahoo_scrape'),
+    status: _scrapeStatus,
+  });
+});
+
+app.post('/api/monitor/articles/:postId/analyze', async (req, res) => {
+  try {
+    const postId = parseInt(req.params.postId, 10);
+    const days = parseInt(req.body?.days, 10) || 30;
+    const analysis = require('./monitor-analysis');
+    const r = await analysis.analyzeArticle(postId, { days });
+    res.json(r);
+  } catch (e) {
+    console.error('[analyze]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/monitor/articles/:postId/comments', (req, res) => {
+  try {
+    const postId = parseInt(req.params.postId, 10);
+    const limit = parseInt(req.query.limit, 10) || 20;
+    res.json(monitorDb.getAnalysisComments(postId, limit));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/monitor/articles/:postId/affiliate-breakdown', (req, res) => {
+  try {
+    const postId = parseInt(req.params.postId, 10);
+    const days = parseInt(req.query.days, 10) || 90;
+    res.json(monitorDb.getArticleAffiliateBreakdown(postId, days));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/monitor/articles/:postId/kw-history', (req, res) => {
+  try {
+    const postId = parseInt(req.params.postId, 10);
+    const topN = parseInt(req.query.top, 10) || 10;
+    res.json(monitorDb.getArticleKwHistory(postId, topN));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1126,6 +1261,17 @@ app.listen(PORT, () => {
       catch (e) { console.error('[cron kw-weekly] ' + e.message); }
     }, { timezone: 'UTC' });
 
-    console.log('[monitor] cron registered (daily 06:00 JST, kw-weekly Mon 07:00 JST)');
+    // Yahoo スクレイピング: 毎日 JST 02:00 = UTC 17:00（前日）
+    cron.schedule('0 17 * * *', async () => {
+      const settings = monitorDb.getSetting('scraper', { enabled: false, limit: 200, intervalSec: 15 });
+      if (!settings.enabled) return;
+      try {
+        const scraper = require('./monitor-scraper');
+        const r = await scraper.runYahooDailyScrape(settings);
+        console.log('[cron yahoo-scrape] ' + JSON.stringify(r));
+      } catch (e) { console.error('[cron yahoo-scrape] ' + e.message); }
+    }, { timezone: 'UTC' });
+
+    console.log('[monitor] cron registered (daily 06:00 JST, kw-weekly Mon 07:00 JST, yahoo-scrape 02:00 JST)');
   }
 });

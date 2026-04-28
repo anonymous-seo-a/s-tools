@@ -204,13 +204,22 @@ async function runBackfillStages() {
 // 週次 Top 30 KW スナップショット
 // ============================================================
 async function runWeeklyKwSnapshot() {
+  const end = addDays(todayISO(), -GSC_LAG_DAYS);
+  const start = addDays(end, -6);
+  return runKwSnapshotForWeek(monday(start), { updateTopKw: true });
+}
+
+/**
+ * 指定週の月曜を weekStart として、その週の Top30 KW snapshot を収集する。
+ * updateTopKw=false にすると articles.top_kw は上書きしない（過去週 backfill 用）
+ */
+async function runKwSnapshotForWeek(weekStart, { updateTopKw = false } = {}) {
   if (db.isJobRunning('kw_weekly')) return { skipped: true };
-  const jobId = db.startJob('kw_weekly');
+  const jobId = db.startJob('kw_weekly', { week_start: weekStart });
   try {
-    const end = addDays(todayISO(), -GSC_LAG_DAYS);
-    const start = addDays(end, -6);
+    const start = weekStart;
+    const end = addDays(start, 6);
     const perPage = await col.fetchGscTopKwByPage(start, end, 30);
-    const weekStart = monday(start);
 
     const rows = [];
     for (const p of perPage) {
@@ -225,14 +234,13 @@ async function runWeeklyKwSnapshot() {
           impressions: q.impressions,
         });
       });
-      // Top 1 を articles.top_kw に反映
-      if (p.queries.length > 0) {
+      if (updateTopKw && p.queries.length > 0) {
         db.updateArticleTopKw(p.post_id, p.queries[0].keyword);
       }
     }
     const n = rows.length > 0 ? db.bulkInsertKwSnapshot(rows) : 0;
     db.finishJob(jobId, { rows_inserted: n, status: 'success' });
-    return { rows_inserted: n };
+    return { week_start: weekStart, rows_inserted: n };
   } catch (e) {
     db.finishJob(jobId, { status: 'failed', error_message: e.message });
     throw e;
@@ -284,5 +292,6 @@ module.exports = {
   runDailyJob,
   startBackfill,
   runWeeklyKwSnapshot,
+  runKwSnapshotForWeek,
   backfillWpMeta,
 };
