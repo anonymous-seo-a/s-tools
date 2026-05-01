@@ -1,7 +1,7 @@
 # ナレッジファイル5：リライトAIシステム設計
 
-最終更新: 2026年5月1日（Phase 3 論点3 確定: Compliance Layer 詳細仕様）
-ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1 / 論点3 確定、論点2 / 論点4 / 論点5 未着手）
+最終更新: 2026年5月1日（Phase 3 論点2 確定: エラーハンドリング設計）
+ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1 / 論点2 / 論点3 確定、論点4 / 論点5 未着手）
 
 このファイルは、Daikiの「自走リライトシステム」の設計確定事項を記録する。
 新規チャットセッションでの設計継続のために必要な情報を構造化保存する。
@@ -454,10 +454,14 @@ CREATE TABLE master_rewrite_session (
   output_tokens_generation INTEGER,
   cost_total_usd REAL,
 
-  -- ワークフロー状態
+  -- ワークフロー状態（論点2 確定後の最終形）
   status TEXT NOT NULL DEFAULT 'planned',
   -- 'planned' / 'analyzing' / 'awaiting_policy_judgment' (案K発動時)
-  -- / 'generating' / 'awaiting_diff_judgment' / 'completed' / 'aborted'
+  -- / 'generating' / 'compliance_checking' (★論点2-6) / 'awaiting_diff_judgment'
+  -- / 'wp_applying' (★論点2-3) / 'completed'
+  -- / 'aborted' (LLM/SerpApi致命的失敗)
+  -- / 'wp_apply_rolled_back' (★論点2-3 WP反映失敗)
+  -- ※ Compliance 検証エンジン異常時は status 変更せず warning モード (論点2-6)
 
   -- 工程6'-A 出力
   analysis_output TEXT,                     -- JSON: 構造分析結果
@@ -484,6 +488,12 @@ CREATE TABLE master_rewrite_session (
   analysis_completed_at DATETIME,
   generation_completed_at DATETIME,
   completed_at DATETIME,
+
+  -- 論点2-3: WordPress 反映ロールバック対応
+  wp_snapshot_before_apply TEXT,            -- 反映前の WP 記事 HTML（ロールバック用）
+                                            -- 3ヶ月後に NULL クリア（cron）
+  wp_apply_started_at DATETIME,
+  wp_apply_completed_at DATETIME,
 
   -- 起票
   triggered_by TEXT NOT NULL,               -- 'queue_auto' / 'daiki_manual'
@@ -1261,6 +1271,157 @@ Phase 3 後半 or Phase 4 で必要に応じて regulation_event_id 列追加を
    - Daiki + 法令確認で正規表現を精査
 4. 差分判定画面ヘッダのサブパネル拡張 (PR表記 / YMYL必須 / 規約違反)
 5. GET /api/rewrite/sessions/:session_id/preview の compliance_checks レスポンス実装
+```
+
+---
+
+## V-F. エラーハンドリング設計（論点2 確定、2026-05-01）
+
+### 設計方針
+
+```
+- リトライ可能なエラーは Adapter 層で吸収（指数バックオフ）
+- リトライ不能 / 致命的エラーは status='aborted'、Daiki 通知
+- システム側の異常（検証エンジン等）は warning モード、処理継続
+  Daiki 判定の最終ガードを信頼（案N「人間判定なし」不採用原則と整合）
+- WP 反映失敗時はロールバック機構で原状復帰
+```
+
+### 2-1: LLM API 失敗時のリトライ戦略
+
+```
+失敗パターン × 対応:
+  429 Rate Limit       → 指数バックオフ (1s→2s→4s→8s→16s, max 5回)
+  5xx Server Error     → 指数バックオフ (max 5回)
+  ネットワークエラー    → 指数バックオフ (max 5回)
+  タイムアウト         → 短バックオフ + 1回リトライ
+  JSON パースエラー    → 1回リトライ（プロンプト「正しい JSON 形式で」強調）
+
+全リトライ失敗時:
+  master_rewrite_session.status = 'aborted'
+  master_rewrite_session.notes に失敗詳細 (JSON: error_type, attempts, last_error_at)
+  Daiki 通知: リライト履歴タブで失敗状態を表示
+```
+
+実装位置: `shared/llm-adapters/anthropic-adapter.js` 等に retry ラッパ組込（OpenAI / Gemini も同パターン）。
+
+### 2-2: SerpApi 失敗時のフォールバック
+
+```
+失敗パターン × 対応:
+  月次クォータ超過    → 即時フォールバック（リトライしない）
+  一時的 API 障害      → 指数バックオフ (max 3回)
+  特定クエリ異常       → 1回リトライ
+
+フォールバック戦略:
+  Step 1: master_competitor_corpus.crawled_at が直近30日以内 → 既存データ使用
+  Step 2: キャッシュなし → Degraded mode
+          Query Fan-out 工程をスキップ、既存データのみで案C 実行
+          notes に 'serpapi_unavailable_degraded' 記録
+  Step 3: 全失敗 → status='aborted'、Daiki 通知
+```
+
+実装位置: `shared/serpapi-adapter.js`（新規、案D 3.H Archive Adapter と同パターン）。
+
+### 2-3: WordPress 反映失敗時のロールバック
+
+```
+失敗パターン × 対応:
+  WP REST API 認証エラー        → ハードエラー、Daiki 通知 + 反映中止
+  ネットワークエラー（一時的）  → リトライ (3回)
+  部分的失敗                    → WP REST API は記事単位 Atomic Update のため
+                                   1記事内の複数 diff は一括 PATCH、部分失敗しない
+
+ロールバック機構:
+  反映前: WP 記事の現在 HTML をスナップショット保存
+          master_rewrite_session.wp_snapshot_before_apply (TEXT)
+  反映実行中: status='wp_applying'、各 diff の applied_to_wp=1
+              wp_apply_started_at 記録
+  致命的失敗時: スナップショットから WP に POST して原状復帰
+                全 diff の applied_to_wp=0 に戻す
+                status='wp_apply_rolled_back'
+
+スナップショット管理:
+  3ヶ月後に NULL クリア（cron で運用）、ストレージ膨張対策
+```
+
+スキーマ拡張: master_rewrite_session に 3 列追加（V-A 章 SQL に反映済）。
+
+実装位置: `node/rewrite/wp-applier.js`（新規）+ 既存 `gap-fill.js updateWpPost()` 流用。
+
+### 2-4: 月次バッチ未実行検知
+
+```
+検知対象:
+  applied_to_wp=1 (リライト反映済)
+  AND ab_test_id IS NULL (A/Bテスト未エントリー)
+  AND applied_at < NOW() - 14 日
+
+検知ロジック (日次 cron、既存 monitor-jobs.js に追加):
+  該当があれば管理画面の「リライト履歴」タブにバナー警告
+  Daiki が手動で A/Bテスト割当 or 14日延長
+
+注: master_rewrite_diff の ab_test_id 紐付け実装は論点5 (SearchPilot variant 割当) で確定
+    論点2 では検知ロジックの構造のみ確定
+```
+
+### 2-5: queue_session_link 「最低1件のリンク」アプリケーションレベル保証
+
+```
+session 作成時にトランザクション内で必ずリンクも作成:
+
+BEGIN TRANSACTION;
+  INSERT INTO master_rewrite_session (...) RETURNING id;
+  INSERT INTO master_rewrite_queue_session_link (queue_id, session_id) VALUES (?, ?);
+COMMIT;
+
+リンク作成失敗 → トランザクション全体 ROLLBACK → session 作成も巻き戻し
+
+既存 session への queue 追加 (1対多):
+  INSERT INTO master_rewrite_queue_session_link (queue_id, session_id)
+  ON CONFLICT(queue_id, session_id) DO NOTHING;
+```
+
+実装位置: `node/rewrite/session-creator.js`（新規）に集約。
+全 session 作成は必ずこのモジュール経由。
+
+### 2-6: Compliance 検証エンジン異常時のフロー（warning モード）
+
+```
+異常パターン:
+  master_rules SELECT エラー（DB接続失敗）
+  正規表現実行例外（malformed pattern）
+  checker 内部例外
+
+対応戦略 (warning モード):
+  master_rewrite_session.status は変更しない（処理継続、'awaiting_diff_judgment' へ）
+  master_rewrite_session.notes に異常詳細記録 (JSON: compliance_check_error)
+  差分判定画面ヘッダに警告サブパネル表示:
+    [規約違反 ⚠ 検証エラー]
+  Daiki が判定時に把握、手動で master_rules を確認 or 警告認識のうえ判定
+```
+
+設計判断:
+```
+- システム完動性 > 検証完璧性 (Daiki 確定方針 2026-05-01)
+  Compliance 検証はシステム側の都合 (DB接続/正規表現例外 等) で異常になる
+  リライト本体は機能するため、検証エンジン異常で全体停止は最小性違反
+- Daiki 判定の最終ガード
+  YMYL 安全性は Daiki 判定（人間最終承認、案N 不採用原則）で担保
+  Compliance 検証は補助、Daiki 判定が主
+```
+
+### Phase 4 実装時の作業
+
+```
+1. shared/llm-adapters/*-adapter.js に retry ラッパ組込
+2. shared/serpapi-adapter.js 新設（フォールバック機構付）
+3. node/rewrite/wp-applier.js 新設（snapshot + ロールバック）
+4. node/rewrite/session-creator.js 新設（トランザクションラッパ）
+5. node/rewrite/llm-execution/compliance-checker.js に warning モード組込
+6. monitor-jobs.js に月次バッチ未実行検知 cron 追加
+7. リライト履歴タブのバナー警告 UI
+8. wp_snapshot_before_apply の 3ヶ月クリア cron
 ```
 
 ---

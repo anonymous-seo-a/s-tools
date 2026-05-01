@@ -93,12 +93,19 @@ s-tools/design/
 - 全差分適用後プレビュー機能 → preview エンドポイント仮実装で対応
 - 著者・監修者管理 UI（master_evidence の人間運用部分） → マスタータブ配下で代用
 
-## 論点2: エラーハンドリング設計
-- LLM API 失敗時のリトライ戦略（Adapter 層レベル）
-- SerpApi 失敗時のフォールバック
-- WordPress 反映失敗時のロールバック
-- 月次バッチ未実行時の検知（applied_to_wp=1 AND ab_test_id IS NULL の経過日数監視）
-- queue_session_link 「最低1件のリンク」アプリケーションレベル保証
+## 論点2: エラーハンドリング設計 ★ 確定（2026-05-01）
+- 2-1 LLM API リトライ: 指数バックオフ (max 5回)、Adapter 層に retry ラッパ
+- 2-2 SerpApi フォールバック: キャッシュ参照 → Degraded mode → aborted
+- 2-3 WP ロールバック: snapshot 保存 + 失敗時原状復帰
+    スキーマ拡張: master_rewrite_session に 3 列追加
+- 2-4 月次バッチ未実行検知: applied_to_wp=1 AND ab_test_id IS NULL の14日経過監視
+    具体的 ab_test_id 紐付けは論点5 で確定
+- 2-5 queue_session_link 保証: トランザクションラッパで session 作成時に必須リンク
+- 2-6 Compliance 検証エンジン異常: warning モード（処理継続、Daiki 判定で最終ガード）
+    Daiki 確定方針: 「完動することがだいじ」
+    Claude 初期推奨「session 中止」を訂正（片側照射バイアス回避）
+- status 列拡張: 'compliance_checking' / 'wp_applying' / 'wp_apply_rolled_back' 追加
+- 詳細: knowledge/05 V-F章 / sessions/2026-05-01_phase3_doten2.md
 
 ## 論点3: Compliance Layer 詳細仕様 ★ 確定（2026-05-01）
 - 3層構造: master_rules (語彙) / master_annotations (訴求KW) / master_ymyl_requirement (構造、新規)
