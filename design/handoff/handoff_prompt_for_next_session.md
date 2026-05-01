@@ -79,17 +79,19 @@ s-tools/design/
 - HCU / 関連記事 / Compliance はリライト判定画面のサブパネルで吸収
 - 詳細: knowledge/05 V-C章 / sessions/2026-05-01_phase3_doten1a.md
 
-### 1-B. 差分判定画面のコア仕様（次セッションで進める）
-- 案L 差分単位判定の操作フロー（採用 / 編集承認 / 棄却 + 棄却カテゴリ5）
-- 案K 発動時の方針承認フロー（高リスク 5カテゴリ）
-- Before/After 比較表示
-- 操作キー（キーボードショートカット）
-- データ構造: master_rewrite_diff の view 設計、API レスポンス JSON
+### 1-B. 差分判定画面のコア仕様 ★ 確定（2026-05-01）
+- レイアウト: (γ) inline diff（変更点のみハイライト、Space で前後展開）
+- キーボード: y/e/n/←/→/Space/Esc/1-5、ボタン文字に埋め込み常時可視
+- 棄却: 5カテゴリモーダル + メモ
+- 編集UI: (e) inline diff editor（After 行クリックで編集モード切替）
+- 方針承認画面（案K発動時）: (α) 縦並びカード
+- サブパネル: (β) ヘッダサマリ + モーダル展開（HCU / 関連記事）
+- API: 8エンドポイント設計確定（GET sessions / diffs / hcu / related, PUT judgment / policy-judgment 等）
+- 詳細: knowledge/05 V-D章 / sessions/2026-05-01_phase3_doten1b.md
 
 ### 1-C. 差分判定画面の周辺機能（MVP では最小、Phase 4 後に精緻化）
-- 編集承認時の編集UI
-- 全差分適用後プレビュー機能
-- 著者・監修者管理 UI（master_evidence の人間運用部分）
+- 全差分適用後プレビュー機能 → preview エンドポイント仮実装で対応
+- 著者・監修者管理 UI（master_evidence の人間運用部分） → マスタータブ配下で代用
 
 ## 論点2: エラーハンドリング設計
 - LLM API 失敗時のリトライ戦略（Adapter 層レベル）

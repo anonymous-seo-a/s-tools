@@ -1,7 +1,7 @@
 # ナレッジファイル5：リライトAIシステム設計
 
-最終更新: 2026年5月1日（Phase 3 論点1-A 確定: UI ナビゲーション統合方針）
-ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1-A 確定、論点1-B〜論点5 未着手）
+最終更新: 2026年5月1日（Phase 3 論点1-B 確定: 差分判定画面のコア仕様）
+ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1 確定、論点2〜論点5 未着手）
 
 このファイルは、Daikiの「自走リライトシステム」の設計確定事項を記録する。
 新規チャットセッションでの設計継続のために必要な情報を構造化保存する。
@@ -906,6 +906,171 @@ Phase 3 詳細設計の論点3 残作業は次の 4 点に縮小:
    - node/client/src/rewrite/RewriteJudgeView.jsx
    - node/client/src/rewrite/RewriteHistoryView.jsx
 5. ヘッダ nav の CSS にカテゴリ区切り適用
+```
+
+---
+
+## V-D. リライト判定画面のコア仕様（論点1-B 確定、2026-05-01）
+
+### 画面構成
+
+```
+リライト判定タブ:
+  session.status で表示が切り替わる
+    'awaiting_policy_judgment' → 方針承認画面 (1-B-3)
+    'awaiting_diff_judgment'   → 差分判定画面 (1-B-1+1-B-2)
+```
+
+### 1-B-1+1-B-2: 差分判定画面（コア）
+
+**レイアウト: (γ) inline diff** （変更点のみハイライト、前後文脈は Space で展開）
+
+```
+┌─────────────────────────────────────────────┐
+│ セッション #123 | 「アコムの審査基準」      │
+│ 差分 7/15 判定済 (47%)                       │
+│ [HCU 18/22 ▼] [関連記事 5件 ▼]               │
+│ [採用 (y)] [編集承認 (e)] [棄却 (n)]         │
+│ [← 前] [次 →] [前後展開 (Space)]              │
+├─────────────────────────────────────────────┤
+│ 段落1（変更なし、グレー）                    │
+│ ─ 段落2（元の文、赤背景・取消線）             │
+│ + 段落2（新しい文、緑背景）                  │
+│ 段落3（変更なし、グレー）                    │
+└─────────────────────────────────────────────┘
+```
+
+**操作フロー:**
+- 採用 (y / Enter) → 自動で次の差分へ
+- 編集承認 (e) → After 行クリックでインライン編集モード → 保存 → 次へ
+- 棄却 (n) → 棄却カテゴリ選択モーダル → 次へ
+
+**キーボードショートカット（ボタン文字に埋め込み、ヘルプ常時可視）:**
+```
+y / Enter  採用
+e          編集承認
+n          棄却
+←          前の差分
+→          次の差分
+Space      前後展開トグル
+1〜5       棄却カテゴリ選択（モーダル内）
+Esc        モーダル閉じる
+```
+
+**棄却カテゴリ（5択 + メモ、knowledge/05 V-A 既確定）:**
+```
+1. truth_beauty_violation  真=美違反
+2. factual_error           事実誤認
+3. regulation_violation    規制違反
+4. evidence_inadequate     Evidence 不足
+5. other                   その他
+```
+
+**編集 UI: (e) inline diff editor**
+
+After 行をクリックすると、その行のみ contentEditable / textarea 編集モードに切替。
+HTMLタグは生で見える（YMYL 規制表記の精密編集が可能）。
+画面構造を維持（差分判定画面と別レイアウトに切り替えない、閉合性◎）。
+
+### 1-B-3: 方針承認画面（案K 高リスク発動時）
+
+**レイアウト: (α) 縦並びカード**
+
+```
+┌─────────────────────────────────────────────────┐
+│ セッション #123 | 「アコムの審査基準」          │
+│ 軸1 IG / target_query: アコム 審査              │
+│ [HCU 18/22 ▼] [関連記事 5件 ▼]                   │
+│ 高リスク検出: 3カテゴリ                         │
+├─────────────────────────────────────────────────┤
+│ ▼ カテゴリ1: title_change                        │
+│   分析: ...                                      │
+│   方針: ...                                      │
+├─────────────────────────────────────────────────┤
+│ ▼ カテゴリ2: rate_update                         │
+│   分析: ...                                      │
+│   方針: ...                                      │
+├─────────────────────────────────────────────────┤
+│ [承認 (y)] [編集承認 (e)] [棄却 (n)]             │
+└─────────────────────────────────────────────────┘
+```
+
+操作フロー:
+- 承認 (y) → status='generating' (Sonnet 4.6 差分生成へ)
+- 編集承認 (e) → policy_summary 編集 UI → 保存 → status='generating'
+- 棄却 (n) → 棄却カテゴリ選択モーダル → status='aborted'
+
+棄却カテゴリは差分判定と同一の5カテゴリ（master_rewrite_session.policy_reject_reason）。
+
+### 1-B-5: サブパネル統合（ヘッダサマリ + モーダル展開）
+
+**配置: (β) ヘッダ直下サマリバー + クリックでモーダル**
+
+| 情報 | サマリ表示 | 詳細表示 |
+|---|---|---|
+| HCU 22項目（master_hcu_checklist） | `[HCU 18/22 ▼]` | モーダル: 22項目 Yes/No + コメント |
+| 関連記事（master_article_similarity） | `[関連記事 5件 ▼]` | モーダル: Top-K リスト + similarity スコア |
+| Compliance（master_rules 参照） | サブパネル不要 | 各差分の rationale JSON 内に組込済（既設計） |
+
+理由:
+- 差分判定画面の幅最大化（主タスクへの集中）
+- 詳細はオンデマンド = 遅延評価
+- 差分判定画面 / 方針承認画面で同じ位置に配置（閉合性◎）
+
+### 1-B-4: API エンドポイント設計
+
+```
+[一覧]
+GET  /api/rewrite/sessions?status=awaiting_*&limit=&offset=
+
+[セッション詳細]
+GET  /api/rewrite/sessions/:session_id              方針承認画面用
+GET  /api/rewrite/sessions/:session_id/diffs        差分判定画面用
+
+[判定操作]
+PUT  /api/rewrite/diffs/:diff_id/judgment
+     Body: { judgment, reject_reason?, reject_note?, edit_content? }
+PUT  /api/rewrite/sessions/:session_id/policy-judgment
+     Body: { judgment, reject_reason?, reject_note?, edited_policy_summary? }
+
+[サブパネル]
+GET  /api/rewrite/sessions/:session_id/hcu
+GET  /api/rewrite/sessions/:session_id/related
+
+[論点1-C 領域、MVP では最小実装]
+GET  /api/rewrite/sessions/:session_id/preview      全差分適用後 HTML
+```
+
+データソース:
+- rewrite.db + monitor.db (ATTACH DATABASE で結合)
+- post_title / post_url は monitor.db.articles から JOIN
+- target_query は master_post_target_query から JOIN
+- selected_axis は master_rewrite_queue から JOIN
+
+認証: 既存の X-User ヘッダ運用（Phase E master-db.js と整合）
+
+### Phase 4 実装時の作業
+
+```
+1. node/client/src/rewrite/RewriteJudgeView.jsx 新設
+   - session.status で画面切替
+   - inline diff レンダラ（差分単位の Before/After ハイライト）
+   - キーボードイベントバインド (y/e/n/←/→/Space/Esc/1-5)
+   - 棄却カテゴリモーダル + 編集モード
+2. node/client/src/rewrite/PolicyJudgeView.jsx 新設
+   - 縦並びカードレンダラ
+   - policy_summary 編集 UI
+3. node/server.js or node/rewrite/api/ に API ルーター新設
+   - 上記 8 エンドポイントの実装
+4. ATTACH DATABASE 'rewrite.db' AS rewrite ヘルパ確立
+   - 既存 monitor-db.js と統合する形で
+```
+
+### 論点1-C 領域（MVP では最小実装、Phase 4 後に精緻化）
+
+```
+- 全差分適用後プレビュー機能 → preview エンドポイントは仮実装（後で詳細）
+- 著者・監修者管理 UI（master_evidence の人間運用部分） → マスタータブ配下で代用
 ```
 
 ---
