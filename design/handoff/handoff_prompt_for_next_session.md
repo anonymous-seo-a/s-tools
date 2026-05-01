@@ -128,11 +128,18 @@ s-tools/design/
 - 全テーブル数: 25 → 26
 - 詳細: knowledge/05 V-G章 / V-A章 master_site_audit_score SQL / sessions/2026-05-01_phase3_doten4.md
 
-## 論点5: SearchPilot variant 割当ロジックの詳細
-- Cloudflare Workers での variant injection 実装方針
-- 1,000記事ずつ control / variant A / variant B 割付ロジック
-- A/B 開始日・観測期間・統計検定タイミング
-- Google Update 期間中の信頼度補正方式
+## 論点5: SearchPilot variant 割当ロジック ★ 確定（2026-05-01）
+- 5-1 CF Workers + KV: テスト開始/終了の 2 イベントで KV push、月次更新
+- 5-2 層別ランダム割付: カテゴリ別均等分散 (cardloan/crypto/securities/fx 各 1/3)
+- 5-3 観測期間: 8週間 (applied_at +7日〜+56日) + Bayesian credible interval 終了時 1回
+    余白: master_ab_test.statistical_method 列追加で将来拡張可能
+- 5-4 Google Update 補正: Status Dashboard 監視 + 完全/部分重複の補正方式
+- 5-5 ab_test_id 紐付け: master_rewrite_diff に ab_test_id 列追加 (論点2-4 派生)
+- 詳細: knowledge/05 V-H章 / V-A章 master_ab_test +statistical_method / master_rewrite_diff +ab_test_id / sessions/2026-05-01_phase3_doten5.md
+
+★ Phase 3 詳細設計フェーズ完了 (論点0〜5 全確定)
+   全テーブル数: 26、Phase E 4 + Phase 1 2 + Phase 2 12 + Phase 3 8
+   次は Phase 4 実装フェーズ、handoff の Phase 4 用書き換えが必要
 
 # 進行順序
 1. Phase 3: 詳細設計  ← 次に進む

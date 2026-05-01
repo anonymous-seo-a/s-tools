@@ -1,7 +1,7 @@
 # ナレッジファイル5：リライトAIシステム設計
 
-最終更新: 2026年5月1日（Phase 3 論点4 確定: サイト全体監査レイヤー設計）
-ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1 / 論点2 / 論点3 / 論点4 確定、論点5 未着手）
+最終更新: 2026年5月1日（Phase 3 論点5 確定: SearchPilot variant 割当ロジック / Phase 3 詳細設計フェーズ完了）
+ステータス: Phase 3 詳細設計フェーズ完了（論点0〜5 全確定）、Phase 4 実装フェーズ未着手
 
 このファイルは、Daikiの「自走リライトシステム」の設計確定事項を記録する。
 新規チャットセッションでの設計継続のために必要な情報を構造化保存する。
@@ -570,6 +570,13 @@ CREATE INDEX idx_diff_risk ON master_rewrite_diff(risk_flag);
 CREATE INDEX idx_diff_applied ON master_rewrite_diff(applied_to_wp);
 ```
 
+★ 論点5-5 で master_rewrite_diff に追加列:
+```sql
+ALTER TABLE master_rewrite_diff ADD COLUMN ab_test_id INTEGER;
+-- master_ab_test.id への論理参照 (SQLite では ALTER で FK 追加不可)
+CREATE INDEX idx_diff_ab_test ON master_rewrite_diff(ab_test_id);
+```
+
 ### Phase 2: 案B 由来 新規テーブル
 
 ```sql
@@ -665,6 +672,11 @@ CREATE TABLE master_ab_test (
   observation_start DATETIME NOT NULL,
   observation_end DATETIME NOT NULL,
   status TEXT DEFAULT 'planned',            -- 'planned' / 'running' / 'completed' / 'aborted'
+  statistical_method TEXT DEFAULT 'bayesian_final',  -- ★論点5-3 追加（検定方式の余白）
+  -- 'bayesian_final'      終了時 1 回の Bayesian credible interval (MVP)
+  -- 'bayesian_sequential' 週次チェック + early stopping (Phase 4 後拡張)
+  -- 'frequentist_t_test'  頻度主義 t 検定 (代替)
+  -- 'custom'              個別 hypothesis に応じたカスタム
   created_by TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   notes TEXT
@@ -1599,6 +1611,150 @@ PUT  /api/audit/site-audit/:id                      ステータス更新
    - サイト全体監査画面の実装
 5. monitor-jobs.js に月次バッチ cron 追加
    - master_article_similarity 全再計算 + master_site_audit_score 検出
+```
+
+---
+
+## V-H. SearchPilot variant 割当ロジック（論点5 確定、2026-05-01）
+
+### 設計方針
+
+```
+- SearchPilot 方式の標準アプローチ採用（Step A-4 既確定）
+- Cloudflare Workers での Edge layer variant injection
+- 層別ランダム割付（カテゴリ別均等分散）
+- 8週間観測 + Bayesian credible interval 検定（MVP）
+- 検定方式は将来拡張可能な余白あり (statistical_method 列)
+- Google Update 期間中の信頼度補正
+```
+
+### 5-1: Cloudflare Workers での variant injection
+
+```
+実装方針: Cloudflare KV + Workers
+
+月次バッチ実行時 (新テスト開始時):
+  1. master_ab_test に新テスト登録
+  2. variant 割当 (control/A/B) を Cloudflare KV に push
+     KV key: post_id, value: {variant, test_id, applied_at}
+
+リクエスト時 (Cloudflare Worker):
+  1. URL から post_id 抽出
+  2. KV から variant 取得 (latency 数ms)
+  3. WordPress オリジン HTML をフェッチ
+  4. variant に応じて HTML 改変:
+     - control: そのまま返す
+     - A / B: variant 別 master_rewrite_diff.content_after を適用
+  5. クライアントに返す
+
+KV 更新頻度: テスト開始/終了の 2 イベントのみ (リアルタイム性不要)
+KV 伝播 (eventual consistency, ~1分): A/B テスト割当は月次更新で許容範囲
+```
+
+実装位置: `node/rewrite/ab-testing/cf-kv-pusher.js` (新規) + Cloudflare Workers スクリプト
+
+### 5-2: 1,000記事ずつの control / variant A / variant B 割付
+
+```
+方法: 層別ランダム割付（カテゴリ別均等分散）
+
+JavaScript 擬似コード:
+  function stratifiedAssign(posts) {
+    const result = { control: [], variantA: [], variantB: [] };
+    const byCategory = groupBy(posts, 'category');
+    for (const [category, list] of Object.entries(byCategory)) {
+      shuffle(list);  // Fisher-Yates
+      const n = list.length;
+      result.control.push(...list.slice(0, n / 3));
+      result.variantA.push(...list.slice(n / 3, 2 * n / 3));
+      result.variantB.push(...list.slice(2 * n / 3));
+    }
+    return result;
+  }
+
+理由:
+- カテゴリ別の交絡排除（cardloan/crypto/securities/fx 各 1/3 ずつ）
+- SearchPilot 方式の標準アプローチ
+- 統計的検出力: 各群 ~800 で成立、1,000 は余裕
+```
+
+実装位置: `node/rewrite/ab-testing/variant-assigner.js` (新規)
+
+### 5-3: A/B テスト 開始日・観測期間・統計検定
+
+```
+SearchPilot 標準パラメータ (デフォルト値):
+  applied_at:                 variant 適用日 (CF KV push 完了時)
+  observation_start:          applied_at + 7日 (indexing 安定化)
+  observation_end:            applied_at + 56日 (8週間)
+  statistical_method:         'bayesian_final' (終了時 Bayesian 検定 1回)
+
+調整可能性 (Daiki 指摘「余白を残す」反映):
+  observation_start/end: 既存 DATETIME 列、個別テストで上書き可
+  statistical_method:    新規列、Phase 4 後に変更可能
+                          'bayesian_sequential' (early stopping) 等
+
+新テスト開始ペース:
+  Phase 4 初期 (運用 1〜3ヶ月): 月次 1 サイクル
+  Phase 4 安定期 (3ヶ月以降):   並行 1〜3 テスト
+                                 (change_category 8種 で交絡なし)
+```
+
+### 5-4: Google Update 期間中の信頼度補正
+
+```
+Update 検出フロー:
+  monitor-jobs.js に検出 cron 追加
+  Google Search Status Dashboard / RSS 監視
+  Update 期間を SQLite に記録
+
+master_ab_test_result.google_update_in_period (既設計、BOOLEAN):
+  観測期間中に Update があった場合は true に更新
+
+補正方式:
+  完全重複 (観測期間 ⊆ Update 期間): 結果破棄、status='aborted' で再テスト
+  部分重複 (観測期間 ∩ Update 期間 ≠ 空): Update 期間を除外して再計算
+  重複なし: 通常通り
+```
+
+実装位置: `shared/google-update-monitor.js` (新規、Adapter パターン)
+
+### 5-5: 月次バッチ未実行検知の ab_test_id 紐付け
+
+論点2-4 派生。`master_rewrite_diff.ab_test_id` 列を追加（V-A 章 SQL 反映済）。
+
+```
+紐付けフロー:
+  月次バッチ実行時:
+    1. applied_to_wp=1 AND ab_test_id IS NULL の diff を取得
+    2. variant 割当ロジック (5-2) で 3 群分割
+    3. master_ab_test に新テスト登録、test_id 取得
+    4. 対象 diff の ab_test_id を更新
+
+論点2-4 検知ロジック (既設計):
+  applied_to_wp=1 AND ab_test_id IS NULL AND applied_at < NOW() - 14日
+  → 月次バッチが連続未実行なら警告
+```
+
+### Phase 4 実装時の作業
+
+```
+1. node/rewrite/ab-testing/variant-assigner.js 新設
+   - 層別ランダム割付ロジック
+2. node/rewrite/ab-testing/cf-kv-pusher.js 新設
+   - Cloudflare KV へ variant 割当 push
+3. Cloudflare Workers スクリプト (cf-worker/ab-injector.js)
+   - リクエスト時 variant injection
+4. shared/google-update-monitor.js 新設
+   - Status Dashboard / RSS 監視 Adapter
+5. node/rewrite/ab-testing/result-collector.js 新設
+   - GSC / GA4 / Clarity からのデータ取得 cron
+6. node/rewrite/ab-testing/statistical-tester.js 新設
+   - Bayesian credible interval 計算
+7. monitor-jobs.js に月次バッチ追加
+   - 新テスト開始 / variant 割当 / KV push
+8. master_ab_test に statistical_method 列追加 (ALTER)
+9. master_rewrite_diff に ab_test_id 列追加 (ALTER)
 ```
 
 ---
