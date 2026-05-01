@@ -116,11 +116,17 @@ s-tools/design/
 - 全テーブル数: 24 → 25
 - 詳細: knowledge/05 V-E章 / V-A章 master_ymyl_requirement SQL / sessions/2026-05-01_phase3_doten3.md
 
-## 論点4: サイト全体監査レイヤー設計
-- 案E 旧軸4（構造的健全性）の移行先
-- master_article_similarity の γ（entity_overlap）を使った Site Reputation Abuse 防衛
-- topical 整合性スコアの計算
-- 個別記事レベルとサイト全体レベルの責任境界
+## 論点4: サイト全体監査レイヤー設計 ★ 確定（2026-05-01）
+- 4-1 責任境界: 個別記事 (4軸キュー/IG/HCU) vs サイト全体 (article_similarity/site_audit)
+- 4-2 γ (entity_overlap) 計算: Google Knowledge Graph API + Jaccard 係数
+    Adapter パターンで将来差し替え可能
+- 4-3 Topical 整合性スコア: config.js の SITE_TOPIC_ENTITIES 定数で主題定義
+    (master_site_topic 新規テーブルは却下、最小性優先)
+- 4-4 Site Reputation Abuse 検出 3パターン:
+    cannibalization / topical_drift / reputation_abuse_risk
+- 4-5 実装: master_site_audit_score 新規テーブル + リライト履歴サブタブ
+- 全テーブル数: 25 → 26
+- 詳細: knowledge/05 V-G章 / V-A章 master_site_audit_score SQL / sessions/2026-05-01_phase3_doten4.md
 
 ## 論点5: SearchPilot variant 割当ロジックの詳細
 - Cloudflare Workers での variant injection 実装方針

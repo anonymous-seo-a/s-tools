@@ -1,7 +1,7 @@
 # ナレッジファイル5：リライトAIシステム設計
 
-最終更新: 2026年5月1日（Phase 3 論点2 確定: エラーハンドリング設計）
-ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1 / 論点2 / 論点3 確定、論点4 / 論点5 未着手）
+最終更新: 2026年5月1日（Phase 3 論点4 確定: サイト全体監査レイヤー設計）
+ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1 / 論点2 / 論点3 / 論点4 確定、論点5 未着手）
 
 このファイルは、Daikiの「自走リライトシステム」の設計確定事項を記録する。
 新規チャットセッションでの設計継続のために必要な情報を構造化保存する。
@@ -166,7 +166,7 @@ s-tools/
 
 ---
 
-## V. 全25テーブル一覧（論点3 確定後: master_ymyl_requirement 追加）
+## V. 全26テーブル一覧（論点4 確定後: master_site_audit_score 追加）
 
 ### Phase 別配置
 
@@ -195,7 +195,7 @@ s-tools/
   13. master_hcu_checklist                 ★ 案B (#5)
   14. master_article_similarity            ★ 案B (#9, #2) - α指標のみPhase 2
 
-[Phase 3 で実装: 7 テーブル]   ← 論点3 で +1
+[Phase 3 で実装: 8 テーブル]   ← 論点3 +1, 論点4 +1
   15. master_regulation_event
   16. master_partner_status_history
   17. master_ab_test
@@ -203,9 +203,10 @@ s-tools/
   19. master_ab_test_pattern
   20. master_clarity_signal
   21. master_ymyl_requirement              ★ 論点3 (2026-05-01)
+  22. master_site_audit_score              ★ 論点4 (2026-05-01)
 ```
 
-合計: 25テーブル（Phase E 4 + 案D完了時点 18 + 案B 追加 2 + 論点3 追加 1）
+合計: 26テーブル（Phase E 4 + 案D完了時点 18 + 案B 追加 2 + 論点3 追加 1 + 論点4 追加 1）
 
 ### 命名衝突の整理（論点0 確定後）
 
@@ -755,6 +756,32 @@ CREATE TABLE master_ymyl_requirement (
 );
 CREATE INDEX idx_ymyl_category ON master_ymyl_requirement(category);
 CREATE INDEX idx_ymyl_status ON master_ymyl_requirement(status);
+```
+
+### Phase 3: 論点4 由来 新規テーブル
+
+```sql
+-- 論点4: サイト全体監査スコア（カニバリ / トピック逸脱 / Site Reputation Abuse）
+-- 旧案E 軸4「構造的健全性」の移行先（個別記事レベルから分離、別レイヤー）
+CREATE TABLE master_site_audit_score (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  audit_type TEXT NOT NULL,
+  -- 'cannibalization' / 'topical_drift' / 'reputation_abuse_risk'
+  target_post_ids TEXT NOT NULL,            -- JSON配列、関連記事 IDs
+  score REAL NOT NULL,                      -- 検出スコア（α/γ/topical_alignment）
+  threshold REAL,                           -- 判定閾値
+  status TEXT NOT NULL DEFAULT 'detected',
+  -- 'detected' / 'reviewed' / 'resolved' / 'ignored'
+  detection_method TEXT,                    -- 'monthly_batch' / 'manual'
+  detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  reviewed_by TEXT,
+  reviewed_at DATETIME,
+  resolved_at DATETIME,
+  notes TEXT
+);
+CREATE INDEX idx_site_audit_type ON master_site_audit_score(audit_type);
+CREATE INDEX idx_site_audit_status ON master_site_audit_score(status);
+CREATE INDEX idx_site_audit_detected ON master_site_audit_score(detected_at);
 ```
 
 ### Phase E 既実装テーブル（論点0 確定後 rewrite.db に移管）
@@ -1422,6 +1449,156 @@ COMMIT;
 6. monitor-jobs.js に月次バッチ未実行検知 cron 追加
 7. リライト履歴タブのバナー警告 UI
 8. wp_snapshot_before_apply の 3ヶ月クリア cron
+```
+
+---
+
+## V-G. サイト全体監査レイヤー設計（論点4 確定、2026-05-01）
+
+### 設計方針
+
+```
+- 案E 旧軸4「構造的健全性」の移行先（IX 章既述）
+- 個別記事レベル（4軸独立キュー / IG / HCU）と分離、別レイヤーで月次バッチ実行
+- Daiki 判定が最終ガード（自動制裁なし、警告レベル）
+```
+
+### 4-1: 責任境界
+
+```
+個別記事レベル（リライト判定 / リライトキュー）:
+  master_rewrite_target_score (4軸独立キュー)
+  master_information_gain_score
+  master_hcu_checklist
+  master_rewrite_diff (差分単位)
+  → 単一記事の品質改善
+
+サイト全体レベル（リライト履歴 > サイト全体監査サブタブ）:
+  master_article_similarity (α text / β query / γ entity)
+  master_site_audit_score (新規)
+  → 複数記事間の関係（カニバリ / トピック / Site Reputation Abuse）
+```
+
+### 4-2: γ (entity_overlap) 計算ロジック
+
+```
+計算方法: Google Knowledge Graph API + Jaccard 係数
+
+理由:
+  - Google 公式エンティティ定義との整合（YMYL 信頼性）
+  - entity_overlap = エンティティ集合の重なり、Jaccard が真=美の定義
+  - α text_similarity と機能分離（embedding は意味類似度、別概念）
+
+実装:
+  shared/entity-extractor-adapter.js（新規、Adapter パターン）
+  Phase 4 で Google KG API 連携
+  無料枠 1000 query/day、月次バッチ + 主要記事のみで API 呼び出し抑制
+
+将来 KG API が終了したら別 Entity 抽出 API に Adapter で差し替え可能。
+```
+
+### 4-3: Topical 整合性スコア
+
+主題エンティティ定義: `config.js` 定数で運用（master_site_topic 新規テーブルは却下）
+
+```javascript
+// config.js
+const SITE_TOPIC_ENTITIES = {
+  cardloan: ['消費者金融', 'カードローン', '実質年率', '限度額', '審査', '即日融資', ...],
+  cryptocurrency: ['暗号資産', 'ビットコイン', '取引所', ...],
+  securities: ['証券会社', '投資信託', 'NISA', ...],
+  fx: ['FX', 'レバレッジ', 'スワップ', ...]
+};
+```
+
+理由:
+- 主題エンティティは安定（4 category × 各 10〜20 件 = 40〜80 件規模）
+- 変更頻度低い、CRUD UI 不要 → 最小性◎
+- partners.json と同様の運用パターン
+- 警戒バイアス「機能を盛りたくなる」回避
+
+スコア計算:
+```
+記事のエンティティ集合 (KG API 抽出) を E_article
+サイト主題エンティティ集合 (config.js) を E_site
+
+topical_alignment_score = |E_article ∩ E_site| / |E_article|
+
+スコア意味:
+  1.0  完全整合
+  0.5  半分整合
+  0.0  完全逸脱
+
+閾値: < 0.5 で「トピック逸脱」と判定
+```
+
+### 4-4: Site Reputation Abuse 防衛 検出 3パターン
+
+```
+1. カニバリゼーション (cannibalization)
+   - text_similarity (α) ≥ 0.8 の記事ペア
+   - 同一 target_query で記事 ≥ 2
+   - 影響: 検索結果での自社内競合、SEO 損失
+
+2. トピック逸脱 (topical_drift)
+   - topical_alignment_score < 0.5
+   - 影響: Site Reputation Abuse スパム判定リスク
+
+3. 大量同質記事 (reputation_abuse_risk)
+   - entity_overlap (γ) ≥ 0.7 の記事ペアが 3 以上
+   - 影響: ドメイン権威の希薄化、Google 制裁対象
+```
+
+検出フロー:
+```
+月次バッチ (cron):
+  1. master_article_similarity 全レコード再計算（β/γ 含む）
+  2. 上記 3 パターンを検出
+  3. 該当ケースを master_site_audit_score にレコード作成
+  4. リライト履歴タブのサブタブ「サイト全体監査」に表示
+  5. Daiki が手動でレビュー → status='resolved'/'ignored'
+```
+
+### 4-5: 実装位置
+
+#### テーブル: master_site_audit_score（V-A 章既反映）
+
+audit_type 別レコード化、ステータス管理（detected/reviewed/resolved/ignored）。
+
+#### API エンドポイント
+
+```
+GET  /api/audit/site-audit?audit_type=&status=     監査結果一覧
+POST /api/audit/site-audit/recalculate              月次バッチ手動トリガー
+PUT  /api/audit/site-audit/:id                      ステータス更新
+```
+
+#### UI 配置: 「リライト履歴」タブ内サブタブ「サイト全体監査」
+
+```
+リライト履歴タブ:
+  [セッション履歴] [サイト全体監査] [月次バッチ未実行警告]
+                       ↑ 4-5 配置
+```
+
+理由:
+- ナビ変更なし、論点1-A 確定の最小性維持
+- リライト履歴とサイト全体監査は「リライト後の効果検証」で文脈一致
+
+### Phase 4 実装時の作業
+
+```
+1. shared/entity-extractor-adapter.js 新設
+   - Google Knowledge Graph API 連携
+   - Adapter パターンで将来差し替え可能
+2. node/rewrite/audit/site-auditor.js 新設
+   - 月次バッチ、3パターン検出ロジック
+3. config.js に SITE_TOPIC_ENTITIES 定数追加
+   - 4 category × 各主題エンティティ群を Daiki と確認しつつ整備
+4. リライト履歴タブにサブタブ追加 (RewriteHistoryView.jsx 拡張)
+   - サイト全体監査画面の実装
+5. monitor-jobs.js に月次バッチ cron 追加
+   - master_article_similarity 全再計算 + master_site_audit_score 検出
 ```
 
 ---
