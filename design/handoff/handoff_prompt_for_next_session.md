@@ -61,6 +61,14 @@ s-tools/design/
 
 # Phase 3 詳細設計の主要論点（先出し）
 
+## 論点0: Phase E 既存4テーブルとの統合方針 ★ 確定（2026-05-01）
+- 確定案: (a) 移管統合 — Phase E 4テーブル（master_annotations /
+  master_rules / master_completeness_checklist / master_audit_log）を
+  rewrite.db に物理移管、新設計と統合
+- 全テーブル数: 20 → 24
+- Compliance Layer の実体は既存 master_rules + master_annotations（論点3 のスコープ縮小）
+- 詳細: sessions/2026-05-01_phase3_doten0.md / knowledge/05 V-B章
+
 ## 論点1: Daikiの真=美判定UI（差分パッチ承認画面）の詳細仕様
 - 案L 差分単位判定の操作フロー
 - 案K 発動時の方針承認フロー（高リスク 5カテゴリ）

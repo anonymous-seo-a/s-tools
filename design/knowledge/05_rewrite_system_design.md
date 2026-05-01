@@ -1,7 +1,7 @@
 # ナレッジファイル5：リライトAIシステム設計
 
-最終更新: 2026年4月30日（案B 完了後の統合版）
-ステータス: 設計フェーズ完了（Phase 2: Step A〜案E〜案C〜案D〜案B 全確定、Phase 3 詳細設計待ち）
+最終更新: 2026年5月1日（Phase 3 論点0 確定: Phase E 既存4テーブルとの統合方針）
+ステータス: Phase 3 詳細設計 進行中（論点0 確定、論点1〜5 未着手）
 
 このファイルは、Daikiの「自走リライトシステム」の設計確定事項を記録する。
 新規チャットセッションでの設計継続のために必要な情報を構造化保存する。
@@ -131,6 +131,8 @@ Phase 4: 実装                      未着手
 | A系（runScoring）スコア | リライト対象選定では使わない（CTA優先度が本来の目的） |
 | B系（alertScore）スコア | リライト対象選定では使わない（順位観測が本来の目的） |
 | analysis_comments | 案V: 直近1件を案C プロンプトに参考情報として渡す（NULL 許容） |
+| master-db.js / masters-routes.js（Phase E 既実装） | 流用、ただし DB_PATH を rewrite.db に切替（論点0 確定） |
+| Phase E 既存4テーブル（master_annotations / master_rules / master_completeness_checklist / master_audit_log） | rewrite.db に物理移管、新設計と統合（論点0 確定、Phase 4 着手時に DROP+移行） |
 
 ### 物理ディレクトリ構成（s-tools 配下、案C + 案D 確定）
 
@@ -164,11 +166,17 @@ s-tools/
 
 ---
 
-## V. 全20テーブル一覧（案D完了 + 案B 確定後）
+## V. 全24テーブル一覧（論点0 確定後: Phase E 4テーブル統合）
 
 ### Phase 別配置
 
 ```
+[Phase E 既実装、Phase 4 で rewrite.db に移管: 4 テーブル]   ★ 論点0 (2026-05-01)
+  E1. master_annotations              （訴求KW別注釈マスター、15行 seed）
+  E2. master_rules                    （表現ルール: 禁止/必須/正式表記、21行 seed）
+  E3. master_completeness_checklist   （マスター整備進捗、56行 seed、HCU記事評価とは別）
+  E4. master_audit_log                （汎用監査ログ、マスター類の編集履歴）
+
 [Phase 1 で実装: 2 テーブル]
   1. master_rewrite_target_score
   2. master_rewrite_queue
@@ -196,7 +204,16 @@ s-tools/
   20. master_clarity_signal
 ```
 
-合計: 20テーブル（案D完了時点 18 + 案B 追加 2）
+合計: 24テーブル（Phase E 4 + 案D完了時点 18 + 案B 追加 2）
+
+### 命名衝突の整理（論点0 確定後）
+
+| 既存（Phase E） | 新設計 | 関係 |
+|---|---|---|
+| `master_rules` | `master_regulation_event` | 粒度違いの親子関係。法令イベント（イベント単位、数件）→ 由来する運用ルール（N件）。当面は legal_basis (TEXT) で間接接続、Phase 3 後半で regulation_event_id 導線を検討 |
+| `master_completeness_checklist` | `master_hcu_checklist` | 用途違い。前者=マスター整備進捗（ゆかちゃん運用）/ 後者=記事ごとの HCU 22項目評価（LLM 自動評価）。命名類似は許容（用途明示で分離可能、改名は破壊的なので避ける） |
+| `master_audit_log` | （対応物なし） | 汎用監査ログとして昇格、リライト関連マスター全体の編集履歴に流用 |
+| `master_annotations` | （対応物なし） | Compliance Layer の訴求KW注釈実体として継続、論点3 で参照ロジック設計 |
 
 ---
 
@@ -703,6 +720,139 @@ CREATE TABLE master_clarity_signal (
 CREATE INDEX idx_clarity_url ON master_clarity_signal(url);
 CREATE INDEX idx_clarity_test ON master_clarity_signal(ab_test_id);
 CREATE INDEX idx_clarity_period ON master_clarity_signal(ab_test_period);
+```
+
+### Phase E 既実装テーブル（論点0 確定後 rewrite.db に移管）
+
+実装ソース: [../node/master-db.js](../node/master-db.js) (initSchema)。
+現状 monitor.db に存在、Phase 4 着手時に rewrite.db に物理移管 + monitor.db からは DROP。
+スキーマは既存実装そのまま（破壊的変更を避ける、最小性優先）。
+
+```sql
+-- 訴求KW別注釈マスター（CTA挿入時/リライト本文中の訴求語句に脚注付与）
+CREATE TABLE master_annotations (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id        TEXT NOT NULL,
+  product_name      TEXT NOT NULL,
+  category          TEXT NOT NULL,
+  trigger_pattern   TEXT NOT NULL,                    -- 訴求KW（例: "最短20分"）
+  trigger_type      TEXT NOT NULL DEFAULT 'keyword',  -- 'keyword' / 'regex' / 'and_condition'
+  trigger_priority  INTEGER NOT NULL DEFAULT 0,
+  annotation_type   TEXT NOT NULL,                    -- '審査・融資' / '限度額' 等
+  annotation_text   TEXT NOT NULL,                    -- 注釈本文
+  symbol            TEXT,                             -- 注釈記号（※a / ※ai / ※p / ※m）
+  scope             TEXT NOT NULL DEFAULT '商材言及時',
+  source_url        TEXT,
+  verified_at       DATE,
+  verified_by       TEXT,
+  status            TEXT NOT NULL DEFAULT 'draft',    -- 'draft' / 'verified' / 'deprecated'
+  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (status IN ('draft', 'verified', 'deprecated')),
+  CHECK (trigger_type IN ('keyword', 'regex', 'and_condition'))
+);
+CREATE INDEX idx_ann_product  ON master_annotations(product_id);
+CREATE INDEX idx_ann_category ON master_annotations(category);
+CREATE INDEX idx_ann_status   ON master_annotations(status);
+
+-- 表現ルール（禁止/必須/正式表記、ASPレギュレーション + 業法運用）
+CREATE TABLE master_rules (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  category          TEXT NOT NULL,
+  product_ids       TEXT NOT NULL,                    -- 'ALL' or 'acom' or 'promise,aiful,mobit'
+  rule_type         TEXT NOT NULL,                    -- '禁止表現' / '必須表現' / '正式表記'
+  ng_text           TEXT NOT NULL,                    -- 検出パターン
+  correct_text      TEXT,                             -- 正規表記（必須/正式時）
+  condition         TEXT NOT NULL DEFAULT '常に',
+  legal_basis       TEXT,                             -- 法令根拠テキスト（将来 master_regulation_event.id 連携検討）
+  source_url        TEXT,
+  verified_at       DATE,
+  verified_by       TEXT,
+  status            TEXT NOT NULL DEFAULT 'draft',
+  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (status IN ('draft', 'verified', 'deprecated')),
+  CHECK (rule_type IN ('禁止表現', '必須表現', '正式表記'))
+);
+CREATE INDEX idx_rules_category ON master_rules(category);
+CREATE INDEX idx_rules_status   ON master_rules(status);
+
+-- マスター整備進捗管理（人間運用、HCU記事評価とは別）
+CREATE TABLE master_completeness_checklist (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  category          TEXT NOT NULL,
+  product_id        TEXT NOT NULL,
+  check_item        TEXT NOT NULL,
+  check_order       INTEGER NOT NULL DEFAULT 0,
+  status            TEXT NOT NULL DEFAULT 'pending',  -- 'pending' / 'in_progress' / 'done'
+  assignee          TEXT,                             -- 'ゆかちゃん' / 'Daiki'
+  completed_at      DATE,
+  notes             TEXT,
+  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (status IN ('pending', 'in_progress', 'done'))
+);
+CREATE INDEX idx_check_product ON master_completeness_checklist(product_id);
+CREATE INDEX idx_check_status  ON master_completeness_checklist(status);
+
+-- 汎用監査ログ（リライト関連マスター類の編集履歴を一元管理）
+-- 本文編集差分は master_rewrite_diff（別概念、衝突しない）
+CREATE TABLE master_audit_log (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  table_name        TEXT NOT NULL,
+  record_id         INTEGER NOT NULL,
+  action            TEXT NOT NULL,                    -- 'create' / 'update' / 'delete'
+  changed_by        TEXT NOT NULL,
+  before_value      TEXT,                             -- JSON 文字列
+  after_value       TEXT,                             -- JSON 文字列
+  changed_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (action IN ('create', 'update', 'delete'))
+);
+CREATE INDEX idx_audit_table      ON master_audit_log(table_name, record_id);
+CREATE INDEX idx_audit_changed_at ON master_audit_log(changed_at);
+```
+
+---
+
+## V-B. Phase E 既存4テーブルとの統合方針（論点0 確定、2026-05-01）
+
+### 確定事項
+
+```
+1. 物理配置: rewrite.db に移管（monitor.db からは Phase 4 着手時に DROP）
+2. スキーマ: 既存実装そのまま維持（破壊的変更を避ける、最小性優先）
+3. 命名: 現状維持（master_completeness_checklist と master_hcu_checklist の
+         名前類似は用途明示で許容）
+4. master_rules ↔ master_regulation_event: 粒度違いの親子関係として両立
+   - 当面は master_rules.legal_basis (TEXT) で間接接続
+   - Phase 3 後半で regulation_event_id 列追加を検討（任意）
+5. master_audit_log: 汎用監査ログとして昇格、リライト関連マスター全体に適用
+6. データ層分離原則の強化: monitor.db = 観測層 / rewrite.db = リライト層 + マスター層
+```
+
+### Phase 4 実装時の物理移管手順（参考）
+
+```
+1. rewrite.db を新規作成（Phase 1 既設計どおり）
+2. master-db.js の DB_PATH を rewrite.db に変更
+3. monitor.db の Phase E 4テーブルを SQL DUMP
+4. rewrite.db に CREATE + INSERT
+5. 動作確認後、monitor.db からは 4テーブルを DROP
+6. server.js の require パス（master-db / masters-routes）はそのまま
+   （内部 DB_PATH のみ変更で透過的に切替）
+※ Phase 4 着手時に Daiki に DROP 実行の最終承認を仰ぐ
+```
+
+### 論点3（Compliance Layer）への影響
+
+新設計の論点3 は実体テーブルの大半が **既存 master_rules + master_annotations で既に存在**。
+Phase 3 詳細設計の論点3 残作業は次の 4 点に縮小:
+
+```
+- LLM 出力の事後検証フロー（master_rules 参照ロジック）
+- PR表記の存在検証（ステマ規制）
+- 必須項目チェック（実質年率 / 限度額 / 返済方式 / 登録番号）
+- master_regulation_event ↔ master_rules の親子接続（任意）
 ```
 
 ---
