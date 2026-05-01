@@ -100,12 +100,14 @@ s-tools/design/
 - 月次バッチ未実行時の検知（applied_to_wp=1 AND ab_test_id IS NULL の経過日数監視）
 - queue_session_link 「最低1件のリンク」アプリケーションレベル保証
 
-## 論点3: Compliance Layer 詳細仕様
-- 景品表示法ステマ規制の自動チェック（PR表記の存在検証）
-- 貸金業法第15条/第16条の必須項目チェック（実質年率・限度額・返済方式・登録番号）
-- ASPレギュレーション禁止表現リスト（A8.net / ValueCommerce / アクセストレード）
-- master_regulation_event との接続
-- LLM出力の事後検証フロー
+## 論点3: Compliance Layer 詳細仕様 ★ 確定（2026-05-01）
+- 3層構造: master_rules (語彙) / master_annotations (訴求KW) / master_ymyl_requirement (構造、新規)
+- 3-1 LLM出力事後検証: 案C 工程6'-C で正規表現ベース検証、rule_type 別に自動修正/risk_flag設定
+- 3-2 PR表記検証: preview エンドポイントで存在チェックのみ
+- 3-3 YMYL必須項目チェック: 全カテゴリ対応 (cardloan/crypto/securities/fx)、新規テーブル master_ymyl_requirement 追加
+- 3-4 master_regulation_event ↔ master_rules 親子接続: 任意・現状維持
+- 全テーブル数: 24 → 25
+- 詳細: knowledge/05 V-E章 / V-A章 master_ymyl_requirement SQL / sessions/2026-05-01_phase3_doten3.md
 
 ## 論点4: サイト全体監査レイヤー設計
 - 案E 旧軸4（構造的健全性）の移行先

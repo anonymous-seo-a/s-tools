@@ -1,7 +1,7 @@
 # ナレッジファイル5：リライトAIシステム設計
 
-最終更新: 2026年5月1日（Phase 3 論点1-B 確定: 差分判定画面のコア仕様）
-ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1 確定、論点2〜論点5 未着手）
+最終更新: 2026年5月1日（Phase 3 論点3 確定: Compliance Layer 詳細仕様）
+ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1 / 論点3 確定、論点2 / 論点4 / 論点5 未着手）
 
 このファイルは、Daikiの「自走リライトシステム」の設計確定事項を記録する。
 新規チャットセッションでの設計継続のために必要な情報を構造化保存する。
@@ -166,7 +166,7 @@ s-tools/
 
 ---
 
-## V. 全24テーブル一覧（論点0 確定後: Phase E 4テーブル統合）
+## V. 全25テーブル一覧（論点3 確定後: master_ymyl_requirement 追加）
 
 ### Phase 別配置
 
@@ -195,16 +195,17 @@ s-tools/
   13. master_hcu_checklist                 ★ 案B (#5)
   14. master_article_similarity            ★ 案B (#9, #2) - α指標のみPhase 2
 
-[Phase 3 で実装: 6 テーブル]
+[Phase 3 で実装: 7 テーブル]   ← 論点3 で +1
   15. master_regulation_event
   16. master_partner_status_history
   17. master_ab_test
   18. master_ab_test_result
   19. master_ab_test_pattern
   20. master_clarity_signal
+  21. master_ymyl_requirement              ★ 論点3 (2026-05-01)
 ```
 
-合計: 24テーブル（Phase E 4 + 案D完了時点 18 + 案B 追加 2）
+合計: 25テーブル（Phase E 4 + 案D完了時点 18 + 案B 追加 2 + 論点3 追加 1）
 
 ### 命名衝突の整理（論点0 確定後）
 
@@ -722,6 +723,30 @@ CREATE INDEX idx_clarity_test ON master_clarity_signal(ab_test_id);
 CREATE INDEX idx_clarity_period ON master_clarity_signal(ab_test_period);
 ```
 
+### Phase 3: 論点3 由来 新規テーブル
+
+```sql
+-- 論点3 (#3-3): YMYL 必須項目マスター（全カテゴリ対応）
+-- 語彙ルール (master_rules) と概念粒度が違うため別テーブル化
+-- master_rules        : 表現レベル（語句単位の置換/検出）
+-- master_annotations  : 訴求KW別注釈
+-- master_ymyl_requirement: 構造レベル（記事内に必須要素が存在するか）
+CREATE TABLE master_ymyl_requirement (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL,            -- 'cardloan' / 'cryptocurrency' / 'securities' / 'fx'
+  requirement_name TEXT NOT NULL,    -- '実質年率' / '登録番号' / '元本毀損リスク開示' 等
+  detection_pattern TEXT NOT NULL,   -- 正規表現
+  legal_basis TEXT,                  -- 法令根拠（'貸金業法第15条' 等）
+  source_url TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (status IN ('draft', 'verified', 'deprecated'))
+);
+CREATE INDEX idx_ymyl_category ON master_ymyl_requirement(category);
+CREATE INDEX idx_ymyl_status ON master_ymyl_requirement(status);
+```
+
 ### Phase E 既実装テーブル（論点0 確定後 rewrite.db に移管）
 
 実装ソース: [../node/master-db.js](../node/master-db.js) (initSchema)。
@@ -1071,6 +1096,171 @@ GET  /api/rewrite/sessions/:session_id/preview      全差分適用後 HTML
 ```
 - 全差分適用後プレビュー機能 → preview エンドポイントは仮実装（後で詳細）
 - 著者・監修者管理 UI（master_evidence の人間運用部分） → マスタータブ配下で代用
+```
+
+---
+
+## V-E. Compliance Layer 詳細仕様（論点3 確定、2026-05-01）
+
+### Compliance Layer 3層構造
+
+| テーブル | 粒度 | 用途 |
+|---|---|---|
+| `master_rules` (Phase E) | 表現レベル | 語句単位の禁止/必須/正式表記（"審査が甘い" NG 等） |
+| `master_annotations` (Phase E) | 訴求KW単位 | 商材別注釈マスター（"最短20分" → ※a 注釈付与） |
+| `master_ymyl_requirement` (論点3 新規) | 構造レベル | 記事内に必須要素が存在するか（実質年率/登録番号 等） |
+
+### 3-1: LLM 出力の事後検証フロー（差分単位、master_rules 参照）
+
+検証タイミング:
+```
+工程6'-A: Opus 4.7 分析 → 'awaiting_policy_judgment' (案K発動時) or 'generating'
+工程6'-B: Sonnet 4.6 差分生成 → 'generating'
+★工程6'-C: Compliance 事後検証 ← 3-1 の対象
+工程6:  Daiki 真=美フィルタ ('awaiting_diff_judgment')
+```
+
+検証エンジン仕様（バックエンド、正規表現ベース）:
+```
+入力: content_after, post.category, target_partner
+
+処理:
+  1. master_rules SELECT WHERE
+       category = post.category
+       AND (product_ids = 'ALL' OR product_ids LIKE '%target_partner%')
+       AND status = 'verified'
+  2. rule_type 別に検証:
+     ┌──────────────┬───────────┬──────────────────────────────┐
+     │ rule_type    │ 検出      │ 違反時の挙動                 │
+     ├──────────────┼───────────┼──────────────────────────────┤
+     │ 禁止表現     │ ng_text   │ risk_flag='regulation_       │
+     │              │ 含む      │ violation' 設定 + Daiki判定  │
+     ├──────────────┼───────────┼──────────────────────────────┤
+     │ 必須表現     │ ng_text   │ 自動修正                     │
+     │              │ あり      │ ng_text → correct_text       │
+     ├──────────────┼───────────┼──────────────────────────────┤
+     │ 正式表記     │ ng_text   │ 自動修正                     │
+     │              │ あり      │ ng_text → correct_text       │
+     └──────────────┴───────────┴──────────────────────────────┘
+  3. 違反履歴を master_rewrite_diff.rationale.compliance に追加
+```
+
+実装位置: `node/rewrite/llm-execution/compliance-checker.js`（新規、Phase 4）
+
+### 3-2: PR表記の存在検証（ステマ規制、記事レベル）
+
+```
+規制: 景品表示法 ステマ規制（2023年10月施行）
+対象: 全カテゴリ（soico /no1/ は常時 PR 記事）
+
+検証ロジック:
+  入力: 全 diff 適用後の preview HTML
+  処理:
+    記事冒頭（H1/H2 直前/直後）に「PR」「広告」「プロモーション」
+    「アフィリエイト」「[PR]」「[広告]」のいずれかが存在するか正規表現検出
+  判定: 存在 → ok=true / 不在 → ok=false (警告)
+
+実装位置: GET /api/rewrite/sessions/:session_id/preview (論点1-B-4)
+
+注: WordPress テーマ側で全記事共通の PR 表記が固定実装されているか
+    Phase 4 実装時に確認、固定なら検証のみ、なしなら master_rules に
+    記事冒頭 PR 表記の必須ルール追加
+```
+
+### 3-3: YMYL 必須項目チェック（全カテゴリ拡張、構造レベル）
+
+対象カテゴリ:
+```
+cardloan        消費者金融       貸金業法第15条/第16条
+cryptocurrency  暗号資産         金商法・資金決済法
+securities      証券             金商法
+fx              FX               金商法
+```
+
+カテゴリ別必須項目 seed 案（Phase 4 実装時に Daiki + 法令確認で精査）:
+```
+cardloan:
+  実質年率 / 限度額 / 返済方式 / 登録番号
+
+cryptocurrency:
+  暗号資産交換業者登録番号 / 価格変動リスク開示 / 法定通貨ではない注記
+
+securities:
+  金融商品取引業者登録番号 / 元本毀損リスク開示 / 手数料表示
+  / 投資判断は自己責任注記
+
+fx:
+  第一種金融商品取引業者登録番号 / レバレッジ規制（個人25倍）注記
+  / 元本毀損リスク開示 / スワップ・スプレッド表示
+```
+
+検証ロジック:
+```
+入力: 全 diff 適用後 preview HTML, post.category
+処理:
+  1. master_ymyl_requirement WHERE
+       category = post.category AND status = 'verified'
+  2. 各 requirement の detection_pattern で正規表現検出
+  3. 全項目存在: OK / 不足項目あり: 警告 + missing[] にリストアップ
+
+レスポンス例:
+{
+  "compliance_checks": {
+    "ymyl_required_items": {
+      "ok": false,
+      "category": "securities",
+      "missing": ["元本毀損リスク開示"],
+      "found": ["金融商品取引業者登録番号", "手数料表示", "投資判断は自己責任注記"]
+    }
+  }
+}
+```
+
+実装位置: GET /api/rewrite/sessions/:session_id/preview (論点1-B-4)
+
+不足検出時の自動補正は MVP 対象外。Daiki が差分判定画面で目視確認、
+手動で master_evidence から必要な節を追加する形で運用開始。
+
+### 3-4: master_regulation_event ↔ master_rules の親子接続（任意、現状維持）
+
+論点0 で「任意・現状維持」と確定済。
+当面は master_rules.legal_basis (TEXT) で間接接続。
+Phase 3 後半 or Phase 4 で必要に応じて regulation_event_id 列追加を検討。
+
+### 差分判定画面のヘッダサブパネル拡張
+
+```
+[HCU 18/22 ▼] [関連記事 5件 ▼] [PR表記 ✓] [YMYL必須 3/4 ✗] [規約違反 0件 ✓]
+                                              ↑          ↑              ↑
+                                              3-2        3-3            3-1
+```
+
+各サブパネルクリックでモーダル展開、詳細確認可能。
+
+### 警戒バイアス対チェック
+
+```
+- 「テーブル単位の最小性 vs システム全体の最小性 取り違え」（案B で判明）:
+  master_rules 拡張 (rule_type='YMYL必須項目') は単一テーブル単位では最小だが、
+  システム全体では概念粒度（語彙ルール vs 構造要素）が混在 → 閉合性違反。
+  → 別テーブル master_ymyl_requirement で責務分離（システム全体最小性 = 真=美）
+
+- 「機能を盛りたくなる」: 不足検出時の自動補正は MVP 対象外、
+  Daiki 目視判定で運用開始。差分パッチ追加生成は Phase 4 後に検討
+```
+
+### Phase 4 実装時の作業
+
+```
+1. node/rewrite/llm-execution/compliance-checker.js 新設
+   - master_rules 参照、rule_type 別の検証エンジン
+2. node/rewrite/llm-execution/preview-checker.js 新設
+   - PR表記検証 (3-2) + YMYL 必須項目検証 (3-3)
+3. master_ymyl_requirement の seed データ投入
+   - 4カテゴリ × 必須項目分の正規表現パターン + 法令根拠
+   - Daiki + 法令確認で正規表現を精査
+4. 差分判定画面ヘッダのサブパネル拡張 (PR表記 / YMYL必須 / 規約違反)
+5. GET /api/rewrite/sessions/:session_id/preview の compliance_checks レスポンス実装
 ```
 
 ---
