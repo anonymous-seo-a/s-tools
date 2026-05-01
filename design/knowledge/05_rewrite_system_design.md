@@ -1,7 +1,7 @@
 # ナレッジファイル5：リライトAIシステム設計
 
-最終更新: 2026年5月1日（Phase 3 論点0 確定: Phase E 既存4テーブルとの統合方針）
-ステータス: Phase 3 詳細設計 進行中（論点0 確定、論点1〜5 未着手）
+最終更新: 2026年5月1日（Phase 3 論点1-A 確定: UI ナビゲーション統合方針）
+ステータス: Phase 3 詳細設計 進行中（論点0 / 論点1-A 確定、論点1-B〜論点5 未着手）
 
 このファイルは、Daikiの「自走リライトシステム」の設計確定事項を記録する。
 新規チャットセッションでの設計継続のために必要な情報を構造化保存する。
@@ -853,6 +853,59 @@ Phase 3 詳細設計の論点3 残作業は次の 4 点に縮小:
 - PR表記の存在検証（ステマ規制）
 - 必須項目チェック（実質年率 / 限度額 / 返済方式 / 登録番号）
 - master_regulation_event ↔ master_rules の親子接続（任意）
+```
+
+---
+
+## V-C. UI ナビゲーション統合方針（論点1-A 確定、2026-05-01）
+
+### 確定事項
+
+```
+1. ヘッダタイトル: "CTA Gap Fill Manager" → "s-tools"
+
+2. 既存タブの改名（命名空間整理、新規リライト系との衝突回避）:
+   "承認" → "CTA挿入"
+   "履歴" → "CTA履歴"
+   "監査" → "CTA監査"
+   （他は維持: 記事 / 商材 / ツール / 順位モニタリング / マスター）
+
+3. 新規タブ追加（リライト系 3タブ）:
+   リライトキュー  — 4軸独立キュー一覧、Daiki が選定承認
+   リライト判定    — 差分パッチ承認画面（論点1-B 詳細設計対象）
+   リライト履歴    — リライトセッション履歴 + 反映状態 + ロールバック
+
+4. ナビ視覚構造（フラット 11タブ + カテゴリ区切り）:
+   [共通]    記事 / 順位モニタリング / マスター
+   [CTA系]   CTA挿入 / CTA履歴 / CTA監査 / 商材 / ツール
+   [リライト系] リライトキュー / リライト判定 / リライト履歴
+   実装: ヘッダ nav 内で border-left or spacing でカテゴリ区切り
+```
+
+### 独立タブを設けない補助情報（リライト判定画面のサブパネル等で吸収）
+
+| 情報 | 配置 |
+|---|---|
+| HCU 22項目評価結果（master_hcu_checklist） | リライト判定画面のサブ表示 |
+| 関連記事（master_article_similarity） | リライト判定画面 + 記事タブのサブ表示 |
+| Compliance 結果（master_rules 参照） | マスタータブ（参照側）+ リライト判定画面（差分検証時） |
+| A/B テスト管理 | Phase 3 後半（Step A-4 実装時）に決定。当面は「リライト履歴」サブ画面 or 「マスター」配下で代用 |
+
+### Phase 4 実装時の作業
+
+```
+1. node/client/src/App.jsx ヘッダタイトル変更
+2. 既存 page state ('review' / 'history' / 'audit') の改名
+   - 'review' → 'cta-insert'
+   - 'history' → 'cta-history'
+   - 'audit' → 'cta-audit'
+   （内部キー、UI ラベルは別途）
+3. 新規 page state 追加: 'rewrite-queue' / 'rewrite-judge' / 'rewrite-history'
+4. 各リライト系画面のコンポーネント新設:
+   - node/client/src/rewrite/RewriteQueueView.jsx
+   - node/client/src/rewrite/RewriteJudgeView.jsx
+   - node/client/src/rewrite/RewriteHistoryView.jsx
+5. ヘッダ nav の CSS にカテゴリ区切り適用
 ```
 
 ---
