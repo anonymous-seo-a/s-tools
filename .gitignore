@@ -26,3 +26,5 @@ node/data/apply-history.json
 node/data/backups/
 node/data/monitor.db
 node/data/monitor.db-*
+node/data/rewrite.db
+node/data/rewrite.db-*
