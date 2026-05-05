@@ -7,13 +7,15 @@
  *   - master_completeness_checklist 完成度管理
  *   - master_audit_log            編集履歴
  *
- * monitor-db.js と同じ SQLite ファイル（data/monitor.db）を共有する。
+ * 物理配置: data/rewrite.db (Phase 4 論点0 で全マスターデータを rewrite.db に統合)
+ * Phase 4 schema.sql に同一 DDL が含まれており、本モジュールの initSchema は
+ * IF NOT EXISTS で冪等動作する。
  */
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = process.env.MONITOR_DB_PATH || path.join(__dirname, 'data', 'monitor.db');
+const DB_PATH = process.env.MASTER_DB_PATH || path.join(__dirname, 'data', 'rewrite.db');
 
 let db = null;
 
