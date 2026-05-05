@@ -907,17 +907,23 @@ CREATE INDEX idx_audit_changed_at ON master_audit_log(changed_at);
 6. データ層分離原則の強化: monitor.db = 観測層 / rewrite.db = リライト層 + マスター層
 ```
 
-### Phase 4 実装時の物理移管手順（参考）
+### Phase 4 実装時の物理移管手順（実施済 2026-05-05 Part 2）
 
 ```
-1. rewrite.db を新規作成（Phase 1 既設計どおり）
-2. master-db.js の DB_PATH を rewrite.db に変更
-3. monitor.db の Phase E 4テーブルを SQL DUMP
-4. rewrite.db に CREATE + INSERT
-5. 動作確認後、monitor.db からは 4テーブルを DROP
-6. server.js の require パス（master-db / masters-routes）はそのまま
-   （内部 DB_PATH のみ変更で透過的に切替）
-※ Phase 4 着手時に Daiki に DROP 実行の最終承認を仰ぐ
+[完了] 1. rewrite.db を新規作成（Phase 1 schema.sql で master_* 4 テーブルも DDL 含む）
+[完了] 2. master-db.js の DB_PATH を rewrite.db に変更
+         （MONITOR_DB_PATH → MASTER_DB_PATH に改名、rewrite/db.js との衝突回避）
+[省略] 3. monitor.db の Phase E 4テーブルを SQL DUMP
+         （実機調査の結果、monitor.db には master_* テーブル不在 = server.js 未起動のため
+           initSchema 未実行。データロスなし）
+[完了] 4. rewrite.db に CREATE + INSERT
+         （schema.sql に DDL 既存、seedIfEmpty が hardcode で 92件投入: ann 15 + rules 21 + checklist 56）
+[省略] 5. monitor.db からの DROP（テーブル不在のため不要）
+[完了] 6. server.js の require パスはそのまま
+         （内部 DB_PATH のみ変更で透過的に切替）
+
+検証: listAnnotations / listRules / getCompletenessSummary 動作 pass、
+      4商品 (acom/aiful/promise/mobit) すべて checklist 14件 + annotations 1〜6件
 ```
 
 ### 論点3（Compliance Layer）への影響
@@ -2318,16 +2324,24 @@ Phase 1 リサーチは情報源の質に幅があり、業界専門家支持と
 ## XV. 進行ステータス（次の一歩）
 
 ```
-次の作業: Phase 3 詳細設計
-  対象:
-    1. Daikiの真=美判定UI（差分パッチ承認画面）の詳細仕様
-    2. エラーハンドリング（LLM API 失敗・SerpApi 失敗・WP 反映失敗）
-    3. Compliance Layer 詳細仕様（景品表示法 / 貸金業法 / ASP レギュ）
-    4. サイト全体監査レイヤー設計（案E 旧軸4 + 関連度テーブル γ）
-    5. SearchPilot variant 割当ロジックの詳細
+[完了] Phase 3 詳細設計（論点0〜5 全確定、2026-05-01）
+[完了] Phase 4 MVP Phase 1（対象選定の自動化、2026-05-05 Part 1）
+       - rewrite.db 26テーブル DDL 適用済
+       - 4軸スコア計算 + API + UI + cron 配線
+       - 案C: cardloan 434件 メタ取得 (WP dump 経由)
+[完了] Phase 4 Part 2（Phase 1 残課題消化、2026-05-05 Part 2）
+       - D: master_* seed 92件 → rewrite.db 投入 (Phase E 物理移管完了)
+       - パス整合 refactor: 4軸を target-selection/ に統一
+
+次の作業: Phase 4 MVP Phase 2（自走システム本格稼働）
+  推奨第一手: Step A-2 Query Fan-out 二段構造に着手
+    - master_query_fanout テーブル投入 (Sonnet 4.6 で seed → sub_query → micro-intent)
+    - shared/llm-adapters/ + schemas/intent_dimension.schema.json を (γ) lazy 構築
+  並行待ち: 案A (Google API 整備、Daiki 環境作業)
+  shared/ 方針: (γ) lazy 構築 - A-2 / A-1 / 案C LLM 実行レイヤー着手時に必要分のみ作る
 
 その後の進行:
-  Phase 4: 実装
+  Phase 4 MVP Phase 3: 学習ループ稼働、自走システム完成形
 ```
 
 ---

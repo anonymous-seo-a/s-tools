@@ -2,8 +2,8 @@
 
 このファイルは、Claude Code 環境で新規セッションを開始するときに、Claudeに最初に渡すプロンプトとして使用する。
 
-最終更新: 2026年5月5日（Phase 4 MVP Phase 1 完了 / Phase 2 着手前）
-前提環境: Claude Code（s-tools/design/ 配下に全資産統合済み、s-tools/node/rewrite/ に Phase 1 実装済み）
+最終更新: 2026年5月5日 Part 2（Phase 1 残課題消化完了 / Phase 2 主要タスク着手前）
+前提環境: Claude Code（s-tools/design/ 配下に全資産統合済み、s-tools/node/rewrite/ に Phase 1 実装 + Part 2 残課題消化済み）
 
 ---
 
@@ -22,10 +22,18 @@ Claude Code 環境で動作している前提。
 
 # 現在地
 
-## Phase 4 MVP Phase 1 完了 (2026-05-05)
-対象選定の自動化が一通り稼働可能状態。8 タスク完了。
+## Phase 4 MVP Phase 1 完了 (2026-05-05 Part 1) + Phase 1 残課題消化完了 (Part 2)
 
-8 コミット (新しい順):
+対象選定の自動化が一通り稼働可能状態 + Phase 2 着手準備完備。
+
+Part 2 で消化された残課題 (2 実装コミット + 1 締めコミット):
+  - D 処理: master_* seed 92件 → rewrite.db 投入 (Phase E 物理移管完了)
+    annotations 15 / rules 21 / checklist 56 / audit 0
+  - パス整合 refactor: 4軸を target-selection/ に統一
+    (scoring/ → target-selection/、CTA scoring との名前衝突回避)
+  - 締め: 記録 + handoff + knowledge/05 更新
+
+Part 1 完了 8 コミット:
   0896bfe feat(rewrite): MVP Phase 1 日次バッチ cron 配線 + 冪等性設計
   86e846e feat(rewrite): MVP Phase 1 リライトキュー UI 実装
   f5b3c09 feat(rewrite): MVP Phase 1 対象選定 API エンドポイント実装
@@ -111,7 +119,7 @@ s-tools/
 
 # Phase 2 必須前提タスク (本セッション着手時に最初にやる)
 
-## ★ Daiki 確定優先順位 (2026-05-05 セッション末で確定、本番データ事実訂正後)
+## ★ Daiki 確定優先順位 (2026-05-05 Part 2 末で確定)
 
 ```
 [完了] 案C: WP SQL dump からの articles メタ抽出
@@ -119,21 +127,45 @@ s-tools/
        → 他カテゴリ (cryptocurrency / securities / fx) は未取得
        → metrics は dev fixture 維持 (5記事のみ)
 
-[次] D: Phase E master_* 4 テーブル + 92 件 seed の rewrite.db 投入
-     master-db.js DB_PATH 切替 + server.js 既存 master_* 参照箇所への影響評価
-     工数感: 数分 + 既存 UI 影響評価
+[完了] D: Phase E master_* 4 テーブル + 92 件 seed の rewrite.db 投入
+       master-db.js DB_PATH 切替 (MASTER_DB_PATH に改名 + default rewrite.db)
+       検証: listAnnotations / listRules / getCompletenessSummary 動作 pass
 
-[その次] shared/ ディレクトリ初期化 (1〜2時間)
-       案C 5-c で確立済の構造を設計通り作る
+[完了] パス整合 refactor: 4軸を target-selection/ に統一
+       scoring/{axis2,axis3,axis4}.js → target-selection/ に git mv
+       4 import 更新、CTA scoring (server.js /api/scoring/*) と名前衝突回避
 
-[その次] パス整合 refactor または Step A-2 着手
-       Daiki の再判断
+[次] ★ Step A-2 Query Fan-out 二段構造に着手 (推奨)
+     - master_query_fanout テーブル投入
+     - LLM (Sonnet 4.6) で seed_query → sub_query (Layer 1) → micro-intent (Layer 2)
+     - intent_dimension JSON: {purpose, barrier, constraint, comparison_axis, expected_format}
+     - shared/llm-adapters/ + schemas/intent_dimension.schema.json を (γ) lazy 構築
+     - 工数感: 数時間〜1セッション
 
 [未着手・並行] 案A: 本番 metrics 収集パイプライン起動
               Google API 認証情報 (GA4 + GSC + service-account-key) + WP REST
               Daiki が認証情報整備次第、monitor-jobs.js 実行
               他カテゴリの記事メタも本パスで取得可能 (案C の補完)
+              ※ master_post_target_query 構築は GSC データ依存のため案A 完了後が本番
 ```
+
+## shared/ ディレクトリ方針 (Part 2 で (γ) 確定)
+
+(γ) lazy 構築方針: A-2 / A-1 / 案C LLM 実行レイヤー着手時に必要分のみ作る。
+理由 (Daiki 確定):
+- 真=美の追加検証で (β) スケルトンも「実装の一形態」と判定
+- A-2 着手時に必要な adapter のインタフェースが文脈で確定するため、
+  スケルトン → 後で書き換えのコストが発生しない
+- 設計と実装の認知ロード一致を狙う戦略
+
+handoff 反省1 (scope creep 回避優先で残課題化) と (γ) は構造が異なる:
+- 反省1: 後回しにして残課題化させた失敗
+- (γ): 設計と実装の認知ロード一致を狙う戦略
+
+A-2 着手時に必要となる shared/ 構成 (該当分のみ):
+  shared/llm-adapters/anthropic-adapter.js  ← Sonnet 4.6 (A-2 query fan-out)
+  shared/llm-adapters/common.js             ← retry ラッパ (論点2-1 指数バックオフ max 5)
+  shared/schemas/intent_dimension.schema.json ← JTBD 5次元 JSON Schema
 
 ## 前提 1: monitor.db データ投入 (★ 2026-05-05 事実訂正)
 
@@ -319,17 +351,26 @@ Phase 2 でも同パターンを継続することを推奨。
 # 最初のタスク (Daiki 確定優先順位に従う)
 
 1. CLAUDE.md と knowledge/05_rewrite_system_design.md を読み込み、現状を把握
-2. 直近のセッション記録 (sessions/2026-05-05_phase4_mvp_phase1_completion.md) を読み、
-   Phase 1 完了経緯と発見補正事項を吸収
-3. Phase 1 完了状態 + Daiki 確定優先順位を Daiki に確認
-4. ★ Step 1: D (Phase E master_* seed の rewrite.db 投入) を判断
-   - master-db.js は seed 92 件を hardcode 済、DB_PATH 切替 + 起動 1 回で完結
-   - server.js / masters-routes.js / client/masters/ への影響評価が必要
-   - Phase 2 論点3 (Compliance Layer) 着手前に処理しておくのが望ましい
-5. ★ Step 2: shared/ ディレクトリ初期化
-   - 案C 5-c 確立済構造を設計通り作る (handoff 中段「前提 2」参照)
-   - 1〜2時間想定
-6. ★ Step 3: パス整合 refactor or Step A-2 着手 — Daiki に判断仰ぐ
+2. 直近のセッション記録を読み、進行スタイルと判断構造を吸収:
+   - sessions/2026-05-05_phase4_mvp_phase1_completion.md (Part 1)
+   - sessions/2026-05-05_part2_phase4_phase2_preparation.md (Part 2、最新)
+3. Part 2 末状態 + Daiki 確定優先順位を Daiki に確認
+4. ★ Step 1: 次の作業 3 案を Daiki に提示 + 推奨提示
+   (A) Step A-2 Query Fan-out 二段構造に着手 (推奨)
+       - shared/llm-adapters/ + schemas/intent_dimension.schema.json を (γ) lazy 構築
+       - 工数感: 数時間〜1セッション
+   (B) master_post_target_query 構築 (案A 待ち依存あり)
+       - GSC データなしで dev fixture または手動投入で着手は可能
+       - 本番投入は案A 完了後
+   (C) 案A (Google API 整備) を Daiki が認証情報準備して着手
+       - 認証情報準備は Daiki 環境作業、Claude 自走不可
+
+   推奨理由 (Part 2 末で記録):
+   - (A) は案A 待ちで停滞しない
+   - shared/ lazy 構築の戦略的検証になる
+   - Phase 2 で最も重い実装タスクの一つを最初に倒す
+
+5. Daiki 判断 → 即着手
 
 それでは Step 1 から進めてください。
 ```
