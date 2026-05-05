@@ -76,9 +76,13 @@ Daiki は判断委任 + 戻し条件明示のスタイルで進行。Claude Code
 
 ### 2-6. monitor.db 未存在環境での挙動
 - dev 環境では fixture seed (5記事 × 70日) で代替動作。
-- 本番投入時は VPS から monitor.db 取得 / 同期が必須前提。
 - バッチは monitor.db 不在時に warn + exit 0 (graceful fallback、cron 環境で
   正常終了扱い)。
+- ★ 2026-05-05 末 訂正: 当初「VPS から取得 / 同期」と記載していたが事実誤認。
+  monitor.db は s-tools/node/ をローカル実行して GA4/GSC API + WP REST API から
+  ローカル構築する設計。VPS には s-tools 自体が存在しない。本番データ投入は
+  monitor-collectors.js / monitor-jobs.js のローカル起動 + Google API 認証情報
+  整備が必要。
 
 ---
 
@@ -86,7 +90,7 @@ Daiki は判断委任 + 戻し条件明示のスタイルで進行。Claude Code
 
 ### 3-1. 既存資産への過剰適応
 - 回避成功。dev-seed-monitor-fixture.js は既存 monitor.db を上書きしない安全
-  ガード付き、本番 monitor.db との接続経路は ATTACH read-only で固定。
+  ガード付き、monitor.db との接続経路は ATTACH read-only で固定。
 
 ### 3-2. 自分の初期推奨に固着
 - 軽度発動。タスク 5 でパス指定で Daiki spec と Claude 推奨が割れた際、
@@ -188,7 +192,8 @@ Daiki: 次タスク指定 (反証処理の継承指示も含む)
 handoff_prompt_for_next_session.md で詳細記載済。要点:
 
 ### 必須前提 3 件
-1. 本番 monitor.db 接続 (Daiki 環境で実施必要)
+1. monitor.db 本番データ投入 (Google API 認証情報整備 + monitor-jobs.js 起動、
+   または当面 dev fixture / WP dump 抽出で代替)
 2. shared/ ディレクトリ初期化 (案C 5-c で確立、未着手)
 3. パス整合 refactor (target-selection/ 統一推奨)
 
@@ -222,7 +227,7 @@ handoff_prompt_for_next_session.md で詳細記載済。要点:
 ### 次回への申し送り
 - 本ハンドオフを最初に読む
 - Phase 1 で確立された進行スタイルを継続 (戻し条件明示 + 判断委任 + 警戒バイアス共有)
-- Phase 2 の最初の論点は「monitor.db 本番接続 → shared/ 初期化 → パス refactor」の
+- Phase 2 の最初の論点は「monitor.db 本番投入手段の確定 → shared/ 初期化 → パス refactor」の
   順序判定 (Daiki 戻し)
 
 ---

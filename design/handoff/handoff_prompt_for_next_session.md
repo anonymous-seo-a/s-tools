@@ -70,8 +70,10 @@ Phase 1 では運用上問題なし。Phase 2 以降に軸別 last_run が必要
 migration 不要。Phase 2 で軸1 本実装時は UPDATE で値書き込み可能。
 
 ### 6. monitor.db 未存在環境では graceful fallback
-Phase 2 着手時、本番 monitor.db との接続確認が必須。dev 環境では
+monitor.db はローカル構築設計 (VPS には存在しない)。dev 環境では
 node/rewrite/scripts/dev-seed-monitor-fixture.js で再現可能 (5記事 × 70日)。
+Phase 2 着手時は WP dump からの articles メタ抽出 (案C、本セッション内着手) +
+本番 metrics 蓄積 (案A、Daiki 認証情報整備次第) の二段構成。
 
 # プロジェクト構造 (s-tools/ 配下)
 
@@ -109,33 +111,73 @@ s-tools/
 
 # Phase 2 必須前提タスク (本セッション着手時に最初にやる)
 
-## ★ Daiki 確定優先順位 (2026-05-05 セッション末で確定)
+## ★ Daiki 確定優先順位 (2026-05-05 セッション末で確定、本番データ事実訂正後)
 
 ```
-最初: 本番 monitor.db 接続確認  (5〜10分で判定可能)
-       → 接続できるか / VPS 取得が必要か / fallback 継続か の3択判定
-次:    shared/ ディレクトリ初期化  (1〜2時間)
-       → 案C 5-c で確立済の構造を設計通り作る
-その次: パス整合 refactor または Step A-2 着手
-       → ここで再度 Daiki の判断
+[完了] 案C: WP SQL dump からの articles メタ抽出
+       → cardloan 434 件すべて投入済 (post_modified 込み)
+       → 他カテゴリ (cryptocurrency / securities / fx) は未取得
+       → metrics は dev fixture 維持 (5記事のみ)
+
+[次] D: Phase E master_* 4 テーブル + 92 件 seed の rewrite.db 投入
+     master-db.js DB_PATH 切替 + server.js 既存 master_* 参照箇所への影響評価
+     工数感: 数分 + 既存 UI 影響評価
+
+[その次] shared/ ディレクトリ初期化 (1〜2時間)
+       案C 5-c で確立済の構造を設計通り作る
+
+[その次] パス整合 refactor または Step A-2 着手
+       Daiki の再判断
+
+[未着手・並行] 案A: 本番 metrics 収集パイプライン起動
+              Google API 認証情報 (GA4 + GSC + service-account-key) + WP REST
+              Daiki が認証情報整備次第、monitor-jobs.js 実行
+              他カテゴリの記事メタも本パスで取得可能 (案C の補完)
 ```
 
-## 前提 1: monitor.db への本番接続確認
+## 前提 1: monitor.db データ投入 (★ 2026-05-05 事実訂正)
 
-### Phase 1 末の確認結果 (2026-05-05)
+### 重要な事実訂正
+当初「VPS から本番 monitor.db を取得」前提で進めていたが、調査の結果:
+- VPS (xserver-soico) は **WordPress ホスティングのみ**、s-tools は動かない
+- VPS にあるのは `~/db-backup-tmp/soico_no1_20260421_183252.sql.gz` (321MB WP dump) のみ
+- monitor.db は s-tools/node/ を **ローカル実行** して GA4/GSC API + WP REST API から
+  構築する設計 (monitor-db.js のコメント参照)
+
+### Phase 1 末 + 案C 完了後の状態 (2026-05-05)
 ```
-node/data/monitor.db (49KB, dev fixture のみ)
-  tables: articles=5 / daily_metrics=350
+node/data/monitor.db
+  articles: 434 件 (cardloan のみ、wp_modified 全件取得済、案C 完了)
+  daily_metrics: 350 件 (5 fixture post_id のみ、本番収集は未着手)
   不在: daily_affiliate_clicks / weekly_kw_snapshot / analysis_comments /
         collection_jobs / backfill_progress / daily_scraped_rank / kv_settings
-判定: dev fixture のみ。本番 monitor.db は未取得状態
+        (本番 monitor-jobs.js 実行で生成、案A 待ち)
 ```
 
-### 次セッションでの確認手順
-1. Daiki が VPS から本番 monitor.db を取得 / 同期 (Claude 不能、Daiki 環境必要)
-2. node/data/monitor.db を本番版に置換
-3. node rewrite/batch/daily-target-selection.js --force で全軸計算が回ることを確認
-4. Phase 1 dev-seed-monitor-fixture.js は dev 専用、本番では不要
+### 案C 完了で動作する処理
+- 軸3 鮮度スコア: 434 件全件で動作 (top 5 stale 〜3.34 ヶ月)
+- 軸1 placeholder: 434 件全件で動作
+- 軸2 経済合理性 / 軸4 Content decay: 5 件 (fixture daily_metrics のみ)
+  本番 metrics 蓄積後に 434 件全件で稼働予定 (案A)
+
+### 投入手段の3択 (Daiki 確定: 案C → 案A は未着手タスク化)
+| 案 | 内容 | 必要なもの | 状態 |
+|---|---|---|---|
+| 案A | 本番収集パイプライン起動 | Google API 認証情報 (GA4/GSC/service-account) + WP REST API | 未着手、Daiki が認証情報準備次第起動 |
+| 案B | dev fixture 拡充 | WP dump からメタ抽出 + metrics 合成 | 検討候補だが Phase 2 着手まで保留 |
+| 案C | WP dump からメタのみ抽出 | scp + 解凍 + posts 抽出 | ★ 完了 (cardloan 434 件投入済、2026-05-05) |
+
+案C 完了 (2026-05-05): cardloan 434 件すべて投入済。Phase 2 の Step A-2
+(Query Fan-out) / Step A-1 IG Score 等は記事 ID + URL + カテゴリ + target_query
+が中心のため metrics 値依存箇所が少ない初期実装は進む。本番 metrics 蓄積は
+案A で並行 (Daiki 認証情報整備次第)。
+
+### 案C 実装スクリプト (再利用可)
+- node/rewrite/scripts/import-articles-from-wp-dump.js
+  cardloan_posts.md の ID リストでフィルタしながら mysqldump を streaming パース
+  29,255 タプル / 11.8 秒で 434/434 完全マッチ
+- 他カテゴリ用の posts md があれば同スクリプトに POSTS_MD_PATH を切替で対応可能
+  (現状 design/data/cardloan_posts.md のみ)
 
 ## 前提 2: shared/ ディレクトリ初期化
 案C 5-c で確立した共通ヘルパー層を物理構築する。
@@ -272,7 +314,7 @@ Phase 2 でも同パターンを継続することを推奨。
 - ファイル直接読み込み可能 (s-tools/ 全配下)
 - shell 実行可能、node スクリプト直接起動可能
 - npm install 済み (node/ + node/client/、Phase 1 で実施)
-- rewrite.db は dev 環境で稼働中 (5記事 fixture)、本番 monitor.db 接続は未
+- rewrite.db は dev 環境で稼働中 (5記事 fixture)、monitor.db は WP dump 抽出 (案C) 進行中 + 本番 metrics 蓄積は未着手 (案A)
 
 # 最初のタスク (Daiki 確定優先順位に従う)
 
@@ -280,12 +322,10 @@ Phase 2 でも同パターンを継続することを推奨。
 2. 直近のセッション記録 (sessions/2026-05-05_phase4_mvp_phase1_completion.md) を読み、
    Phase 1 完了経緯と発見補正事項を吸収
 3. Phase 1 完了状態 + Daiki 確定優先順位を Daiki に確認
-4. ★ Step 1: 本番 monitor.db 接続確認 から着手
-   - node/data/monitor.db の現状を確認 (前回末は dev fixture のみだった)
-   - Daiki が本番 DB を取得 / 配置済みかを確認
-   - 配置済 → daily-target-selection.js --force で動作確認
-   - 未配置 → Daiki に取得手段の判断を仰ぐ (VPS scp / monitor-jobs 自走 / fallback 継続)
-   - 5〜10分で判定完了
+4. ★ Step 1: D (Phase E master_* seed の rewrite.db 投入) を判断
+   - master-db.js は seed 92 件を hardcode 済、DB_PATH 切替 + 起動 1 回で完結
+   - server.js / masters-routes.js / client/masters/ への影響評価が必要
+   - Phase 2 論点3 (Compliance Layer) 着手前に処理しておくのが望ましい
 5. ★ Step 2: shared/ ディレクトリ初期化
    - 案C 5-c 確立済構造を設計通り作る (handoff 中段「前提 2」参照)
    - 1〜2時間想定

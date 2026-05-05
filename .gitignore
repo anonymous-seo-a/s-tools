@@ -28,3 +28,7 @@ node/data/monitor.db
 node/data/monitor.db-*
 node/data/rewrite.db
 node/data/rewrite.db-*
+
+# WP SQL dump (再取得可能、リポジトリに残さない)
+node/data/*.sql.gz
+node/data/*.sql
