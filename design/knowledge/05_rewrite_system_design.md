@@ -2353,18 +2353,26 @@ Phase 1 リサーチは情報源の質に幅があり、業界専門家支持と
 [完了] Phase 4 Part 3（Step A-2 Query Fan-out 二段構造、2026-05-05 Part 3）
        - shared/llm-adapters/anthropic-adapter.js: Sonnet 4.6 + Opus 4.7 ラッパ
        - shared/schemas/intent_dimension.schema.json: JTBD 5次元 JSON Schema (ajv)
-       - master_query_fanout: layer=1 (主題分解) 10件 + layer=2 (micro-intent + JTBD) 62件
-       - 警戒バイアス [h] YMYL 上流フィルタ怠惰 を新規確立 (commit 50aba44 即時対応)
-       - shared/ (γ) lazy 構築方針の戦略的検証 = 成功
+       - master_query_fanout: layer=1 10件 + layer=2 62件
+       - 警戒バイアス [h] YMYL 上流フィルタ怠惰 を新規確立
        - Phase 2 主要実装タスク 1/7 達成
+[完了] Phase 4 Part 4（Step A-1 着手分 + 案A 統合、2026-05-05 Part 4）
+       - shared/serpapi-adapter.js: SerpApi 公式 npm ラッパ
+       - rewrite/competitor-corpus/collect.js: organic top N=3 投入
+       - rewrite/post-target-query/build.js: GSC primary/secondary 投入
+       - master_competitor_corpus: 1 件 smoke 投入 (本格運用は別タスク)
+       - master_post_target_query: 1 記事 smoke 投入 (本格運用は別タスク)
+       - 並列タスク戦略 (Daiki 配置 + Claude Code 実装) の検証 = 成功
+       - 戻し対応: service-account-key..json typo / GSC URL www 不整合
+       - Phase 2 主要実装タスク 2.5/7 達成
 
-次の作業: Phase 4 MVP Phase 2 残 6 タスク
-  推奨第一手 (Part 3 末で encode):
-    優先1: 案A (Google API 整備、Daiki 環境作業)
-           → Step A-1 の文脈充実の前提
-    優先2: タスク 2 SerpApi Adapter + master_competitor_corpus
-           → Step A-1 系列の最初、shared/ lazy 構築方針の継続検証
-    優先3: タスク 5 master_hcu_checklist (案B # 5、軽量、独立)
+次の作業: Phase 4 MVP Phase 2 残 4.5 タスク
+  推奨第一手 (Part 4 末で encode):
+    優先1: Step A-1 後半 (master_fact_set + master_information_gain_score)
+           → Phase 2 最大の山場、本日確立した shared/ + LLM Adapter の本格応用
+    優先2: 一括投入バッチ実装 (全 Layer1 sub_query / 全 cardloan 434 記事)
+    優先3: master_hcu_checklist (案B # 5、軽量・独立)
+    優先4: master_article_similarity α (案B # 9、軽量・独立)
 
 その後の進行:
   Phase 4 MVP Phase 3: 学習ループ稼働、自走システム完成形
