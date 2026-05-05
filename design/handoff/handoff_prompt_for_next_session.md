@@ -109,11 +109,33 @@ s-tools/
 
 # Phase 2 必須前提タスク (本セッション着手時に最初にやる)
 
+## ★ Daiki 確定優先順位 (2026-05-05 セッション末で確定)
+
+```
+最初: 本番 monitor.db 接続確認  (5〜10分で判定可能)
+       → 接続できるか / VPS 取得が必要か / fallback 継続か の3択判定
+次:    shared/ ディレクトリ初期化  (1〜2時間)
+       → 案C 5-c で確立済の構造を設計通り作る
+その次: パス整合 refactor または Step A-2 着手
+       → ここで再度 Daiki の判断
+```
+
 ## 前提 1: monitor.db への本番接続確認
-- 本番 VPS 等から monitor.db を取得 or local 同期
-- node/data/monitor.db に配置
-- daily-target-selection.js を --force で実行して全軸計算が回ることを確認
-- Phase 1 dev-seed-monitor-fixture.js は dev 専用、本番では不要
+
+### Phase 1 末の確認結果 (2026-05-05)
+```
+node/data/monitor.db (49KB, dev fixture のみ)
+  tables: articles=5 / daily_metrics=350
+  不在: daily_affiliate_clicks / weekly_kw_snapshot / analysis_comments /
+        collection_jobs / backfill_progress / daily_scraped_rank / kv_settings
+判定: dev fixture のみ。本番 monitor.db は未取得状態
+```
+
+### 次セッションでの確認手順
+1. Daiki が VPS から本番 monitor.db を取得 / 同期 (Claude 不能、Daiki 環境必要)
+2. node/data/monitor.db を本番版に置換
+3. node rewrite/batch/daily-target-selection.js --force で全軸計算が回ることを確認
+4. Phase 1 dev-seed-monitor-fixture.js は dev 専用、本番では不要
 
 ## 前提 2: shared/ ディレクトリ初期化
 案C 5-c で確立した共通ヘルパー層を物理構築する。
@@ -252,19 +274,24 @@ Phase 2 でも同パターンを継続することを推奨。
 - npm install 済み (node/ + node/client/、Phase 1 で実施)
 - rewrite.db は dev 環境で稼働中 (5記事 fixture)、本番 monitor.db 接続は未
 
-# 最初のタスク
+# 最初のタスク (Daiki 確定優先順位に従う)
 
 1. CLAUDE.md と knowledge/05_rewrite_system_design.md を読み込み、現状を把握
 2. 直近のセッション記録 (sessions/2026-05-05_phase4_mvp_phase1_completion.md) を読み、
    Phase 1 完了経緯と発見補正事項を吸収
-3. Phase 1 完了状態のサマリを Daiki に提示 (本ハンドオフ「現在地」を要約)
-4. Phase 2 着手の最初の判断を仰ぐ (推奨順):
-   a. 必須前提タスク 3 件 (monitor.db 接続 / shared/ 初期化 / パス整合) のうち
-      どこから?
-   b. monitor.db を本番から取得する手段の確認 (Daiki が提示する必要)
-   c. shared/ 初期化は Phase 2 主要タスクのどれより先か?
+3. Phase 1 完了状態 + Daiki 確定優先順位を Daiki に確認
+4. ★ Step 1: 本番 monitor.db 接続確認 から着手
+   - node/data/monitor.db の現状を確認 (前回末は dev fixture のみだった)
+   - Daiki が本番 DB を取得 / 配置済みかを確認
+   - 配置済 → daily-target-selection.js --force で動作確認
+   - 未配置 → Daiki に取得手段の判断を仰ぐ (VPS scp / monitor-jobs 自走 / fallback 継続)
+   - 5〜10分で判定完了
+5. ★ Step 2: shared/ ディレクトリ初期化
+   - 案C 5-c 確立済構造を設計通り作る (handoff 中段「前提 2」参照)
+   - 1〜2時間想定
+6. ★ Step 3: パス整合 refactor or Step A-2 着手 — Daiki に判断仰ぐ
 
-それでは Phase 2 実装から進めてください。
+それでは Step 1 から進めてください。
 ```
 
 ---
