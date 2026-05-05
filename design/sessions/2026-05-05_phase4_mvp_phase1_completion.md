@@ -227,12 +227,84 @@ handoff_prompt_for_next_session.md で詳細記載済。要点:
 ### 次回への申し送り
 - 本ハンドオフを最初に読む
 - Phase 1 で確立された進行スタイルを継続 (戻し条件明示 + 判断委任 + 警戒バイアス共有)
-- Phase 2 の最初の論点は「monitor.db 本番投入手段の確定 → shared/ 初期化 → パス refactor」の
-  順序判定 (Daiki 戻し)
+- Phase 2 の最初の論点は **D (Phase E master_* seed の rewrite.db 投入)** から
+  (案C による articles メタ取得は本セッションで完了、handoff 参照)
+
+---
+
+## 9. セッション末延長作業 (2026-05-05 後半、案C 実装 + 事実訂正)
+
+「セッション締め」直前に Daiki から「VPS SSH は使えると思う」発言があり、
+そこから VPS 構造調査 → 設計前提の崩壊判明 → 案C 実装まで延長。
+
+### 9-1. VPS 構造調査の発見
+
+| 項目 | 当初想定 | 実態 |
+|---|---|---|
+| s-tools の稼働場所 | VPS で稼働中 | ローカルのみ、VPS は WP ホスティング専用 |
+| 本番 monitor.db の所在 | VPS から取得可能 | 存在しない、ローカル構築設計 (monitor-jobs.js) |
+| Phase E 92件 seed | 既存運用データ | master-db.js に hardcode、再投入数分 |
+
+これにより handoff (本セッション末で記述) + sessions/2026-05-01_phase3_doten0.md
+(過去記述) 双方で「VPS 取得」「VPS 稼働中」の事実誤認を訂正。
+
+### 9-2. 案C (WP dump からのメタ抽出) 実行結果
+
+代替手段3択 (案A 本番収集 / 案B fixture 拡充 / 案C WP dump 抽出) のうち、
+Daiki 判断で **案C** を選択、本セッション内で完結。
+
+| 工程 | 結果 |
+|---|---|
+| VPS dump 取得 (scp) | 17.6 秒、321MB |
+| dump 解凍 + パース | streaming gunzip + 自作 mysqldump VALUES タプルパーサ |
+| マッチ率 | 434 / 434 完全一致 (cardloan_posts.md の全 ID が dump に存在) |
+| 投入 | monitor.db.articles に upsert、wp_modified 全件取得 |
+| 軸3 動作確認 | 5 件 → 434 件で稼働 (top stale 〜3.34 ヶ月) |
+
+成果物: node/rewrite/scripts/import-articles-from-wp-dump.js (180 行)
+入力依存: design/data/cardloan_posts.md (434 件、Daiki が 2026-05-02 抽出済)
+
+### 9-3. ケースB 確定経緯 (mysql client 不在対応)
+
+mysql/mariadb 不在判明時、3択を Daiki に提示せず判断委任で確定:
+- ケースA: mysql 利用可 → 案3 (一時 DB リストア)
+- ケースB: mysql 不在 → 案1 スケールダウン (cardloan のみ自作パース)
+- ケースC: brew install 提案 → Daiki 判断疲労考慮で却下
+
+ケースBに即確定、Daiki 判断要請を増やさない警戒バイアス回避が機能。
+
+### 9-4. 警戒バイアス対チェック (本延長作業)
+
+| バイアス | 結果 | 備考 |
+|---|---|---|
+| カテゴリ抽出を盛り込みたくなる | 回避 | cardloan のみ、wp_term_relationships JOIN は避けた |
+| dump 全体を取り込みたくなる | 回避 | wp_posts のみ抽出、他テーブル無視 |
+| dev fixture との整合性過剰調整 | 回避 | upsert で 5 fixture を実データ置換、metrics は維持 |
+| mysql client インストール推奨 | 回避 | 不在 → ケースB 即実行、Daiki 判断要請ゼロ |
+| 監視機能の盛り込み | 回避 | 1 回限りスクリプト、cron 化なし |
+
+### 9-5. 戻し条件の境界判定 (D 処理)
+
+「案C 完了後、D 処理を本セッションで実施するか / 次セッション送りか」で
+Daiki に戻し → **次セッション送り** で確定。
+
+理由 (Daiki 確定):
+- D は server.js / masters-routes.js / client/masters/ への影響評価が必要
+- 30〜90分の追加作業で本セッションが長くなりすぎる
+- handoff に「最初のタスク」として encode 済、次セッション冒頭で集中処理可能
+
+### 9-6. Phase 4 で観察された新バイアス (追加)
+
+#### 「設計ナレッジへの過度の信頼」
+過去のセッション記録 (doten0.md line 19) の「VPS 稼働中」記述を、
+本セッションで実機調査するまで疑わなかった。Phase 1 完了時に「monitor.db
+を VPS から取得」前提で handoff を書いた段階で、実機確認していれば早期に
+誤認を解消できた。
+教訓: 重要な前提は実機で1回確認する習慣を持つ。
 
 ---
 
 ## END OF SESSION RECORD
 
-Phase 4 MVP Phase 1 完了。
-次セッション = Phase 4 MVP Phase 2 着手。
+Phase 4 MVP Phase 1 完了 + 案C 完了 + 設計事実訂正 完了。
+次セッション = D (Phase E seed 投入) 判断 → shared/ 初期化 → Phase 2 本格着手。
