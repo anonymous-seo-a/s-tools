@@ -12,7 +12,7 @@ CREATE TABLE master_rewrite_target_score (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   post_id INTEGER NOT NULL,
   axis TEXT NOT NULL,
-  score_value REAL NOT NULL,
+  score_value REAL,                         -- NULL 許容: axis1_information_gain は Phase 2 まで未計算
   score_components TEXT,
   calculated_at DATETIME NOT NULL,
   period_days INTEGER,
