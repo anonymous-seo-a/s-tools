@@ -8,9 +8,9 @@
 const fs = require('fs');
 const { open, MONITOR_DB_PATH } = require('../db');
 const axis1 = require('../target-selection/axis1-information-gain');
-const axis2 = require('../scoring/axis2');
-const axis3 = require('../scoring/axis3');
-const axis4 = require('../scoring/axis4');
+const axis2 = require('../target-selection/axis2');
+const axis3 = require('../target-selection/axis3');
+const axis4 = require('../target-selection/axis4');
 
 const IDEMPOTENCY_HOURS = 24;
 const EXIT_OK = 0;

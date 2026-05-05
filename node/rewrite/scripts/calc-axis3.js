@@ -1,6 +1,6 @@
 'use strict';
 
-const { calculateAxis3, persistScores } = require('../scoring/axis3');
+const { calculateAxis3, persistScores } = require('../target-selection/axis3');
 
 function parseArgs(argv) {
   const args = { asOf: null, persist: true, top: 20 };

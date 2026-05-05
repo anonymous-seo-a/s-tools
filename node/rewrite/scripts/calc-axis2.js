@@ -1,6 +1,6 @@
 'use strict';
 
-const { calculateAxis2, persistScores, DEFAULT_PERIOD_DAYS } = require('../scoring/axis2');
+const { calculateAxis2, persistScores, DEFAULT_PERIOD_DAYS } = require('../target-selection/axis2');
 
 function parseArgs(argv) {
   const args = { periodDays: DEFAULT_PERIOD_DAYS, asOf: null, persist: true, top: 20 };
