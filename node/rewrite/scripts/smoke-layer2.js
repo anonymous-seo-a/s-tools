@@ -32,7 +32,12 @@ const seed_query = process.argv[2] || '即日融資 比較';
   result.results.forEach((r) => {
     console.log(`  Layer1[id=${r.parent.id}] ${r.parent.sub_query} → ${r.micro_intents.length} micro-intents`);
     r.micro_intents.forEach((m, i) => {
+      const dims = m.intent_dimension || {};
+      const dimStr = ['purpose', 'barrier', 'constraint', 'comparison_axis', 'expected_format']
+        .map((k) => `${k}=${dims[k] === null ? 'null' : dims[k]}`)
+        .join(' / ');
       console.log(`     [${i + 1}] id=${m.id} ${m.sub_query}`);
+      console.log(`              ${dimStr}`);
     });
   });
   console.log('total usage:', result.total_usage);
@@ -42,6 +47,26 @@ const seed_query = process.argv[2] || '即日融資 比較';
     .prepare("SELECT COUNT(*) AS n FROM master_query_fanout WHERE layer=2 AND seed_query=?")
     .get(seed_query);
   console.log(`master_query_fanout (layer=2, seed_query="${seed_query}"): ${total.n} 件`);
+
+  const dimStats = conn
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN json_extract(intent_dimension, '$.purpose') IS NULL THEN 1 ELSE 0 END) AS purpose_null,
+         SUM(CASE WHEN json_extract(intent_dimension, '$.barrier') IS NULL THEN 1 ELSE 0 END) AS barrier_null,
+         SUM(CASE WHEN json_extract(intent_dimension, '$.constraint') IS NULL THEN 1 ELSE 0 END) AS constraint_null,
+         SUM(CASE WHEN json_extract(intent_dimension, '$.comparison_axis') IS NULL THEN 1 ELSE 0 END) AS comparison_axis_null,
+         SUM(CASE WHEN json_extract(intent_dimension, '$.expected_format') IS NULL THEN 1 ELSE 0 END) AS expected_format_null,
+         COUNT(*) AS total
+       FROM master_query_fanout
+       WHERE layer=2 AND seed_query=?`
+    )
+    .get(seed_query);
+  console.log('intent_dimension null 率 (per dimension):');
+  console.log(`  purpose:         ${dimStats.purpose_null}/${dimStats.total}`);
+  console.log(`  barrier:         ${dimStats.barrier_null}/${dimStats.total}`);
+  console.log(`  constraint:      ${dimStats.constraint_null}/${dimStats.total}`);
+  console.log(`  comparison_axis: ${dimStats.comparison_axis_null}/${dimStats.total}`);
+  console.log(`  expected_format: ${dimStats.expected_format_null}/${dimStats.total}`);
   console.log('--- pass ---');
 })().catch((err) => {
   console.error('--- FAIL ---');

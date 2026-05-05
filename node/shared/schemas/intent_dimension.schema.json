@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Intent Dimension (JTBD 5 dimensions)",
+  "description": "案B # 3 で定義された JTBD 5次元の検索意図分解。各次元は推測困難な場合 null を許容。",
+  "type": "object",
+  "required": ["purpose", "barrier", "constraint", "comparison_axis", "expected_format"],
+  "additionalProperties": false,
+  "properties": {
+    "purpose": {
+      "type": ["string", "null"],
+      "description": "ユーザーが解決したい上位目的 (例: 資金調達、医療費の支払い)"
+    },
+    "barrier": {
+      "type": ["string", "null"],
+      "description": "解決を妨げる障壁 (例: 審査落ち、信用情報)"
+    },
+    "constraint": {
+      "type": ["string", "null"],
+      "description": "課されている制約 (例: 即時性、土日対応、金額上限)"
+    },
+    "comparison_axis": {
+      "type": ["string", "null"],
+      "description": "比較する軸 (例: 金利、限度額、審査時間)"
+    },
+    "expected_format": {
+      "type": ["string", "null"],
+      "description": "期待する出力形式 (例: 比較表、手順説明、ランキング)"
+    }
+  }
+}
