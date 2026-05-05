@@ -110,4 +110,16 @@ export const api = {
     const qs = new URLSearchParams({ table, ...params });
     return `${BASE}/api/masters/export?${qs}`;
   },
+
+  // ============================================================
+  // リライトシステム — 対象選定 (Phase 4 MVP Phase 1)
+  // ============================================================
+  getRewriteCandidates: (axis, limit = 20) =>
+    request(`/api/rewrite/queue?axis=${encodeURIComponent(axis)}&limit=${limit}`),
+  getRewriteQueue: (status) =>
+    request(`/api/rewrite/queue${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  createRewriteQueue: (body) =>
+    request('/api/rewrite/queue', { method: 'POST', body: JSON.stringify(body) }),
+  updateRewriteQueue: (id, body) =>
+    request(`/api/rewrite/queue/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 };
