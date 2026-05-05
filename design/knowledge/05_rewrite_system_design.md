@@ -2271,7 +2271,8 @@ Phase 3: 学習ループ稼働（実工数 8.5〜13日）
 - WordPress 反映の冪等性設計（同じ diff を二重適用しない保証）
 - SearchPilot variant 割当ロジックの詳細
 - HCU 22項目の正確な項目数（Phase 2 実装時に Google 公式から再取得）
-- intent_dimension JSON Schema の正規定義（shared/schemas/intent_dimension.schema.json）
+- ~~intent_dimension JSON Schema の正規定義（shared/schemas/intent_dimension.schema.json）~~
+  → Phase 4 Part 3 で実装完了、JSON Schema draft-07、JTBD 5次元、ajv validation 稼働中
 - 案B (#9) レベル3 の関連度計算アルゴリズム詳細（埋め込みベクトル選定）
 
 ### 環境継続監視
@@ -2319,6 +2320,23 @@ Phase 1 リサーチは情報源の質に幅があり、業界専門家支持と
 → 案B # 9, # 10 の判定で実際に機能した
 ```
 
+### Phase 4 Part 3 (Step A-2) で判明: 「YMYL 領域の上流フィルタ怠惰バイアス」
+```
+発動箇所: Layer1 主題分解 LLM 出力に違反表現 (「審査なし」「審査 甘い」) 混入
+発動理由: 「Compliance Layer で後始末すれば良い」と上流対策を後回しにする傾向
+構造: 「上流で混入させて下流で除去」 = 真=美の閉合性違反
+
+対処パターン:
+  1. 上流 (LLM プロンプト) に design ナレッジ Phase 4-3「除外候補」を参照
+     research/phase_1_research_report.md L250 + L377 が確定済の禁止表現リスト
+  2. 禁止表現リスト + 許容中立表現リスト両方をプロンプトに明示
+     (過度な厳格化を避けるため許容表現も併記)
+  3. 既存違反データは DELETE + 再投入 (修復履歴を amend ではなく新規コミットで残す)
+
+→ Phase 4 Part 3 で確立、commit 50aba44 で即時対応 → 警戒バイアスとして登録
+→ Phase 2 後半 (Step A-1 / 案C LLM 実行レイヤー) でも継続適用必須
+```
+
 ---
 
 ## XV. 進行ステータス（次の一歩）
@@ -2332,13 +2350,21 @@ Phase 1 リサーチは情報源の質に幅があり、業界専門家支持と
 [完了] Phase 4 Part 2（Phase 1 残課題消化、2026-05-05 Part 2）
        - D: master_* seed 92件 → rewrite.db 投入 (Phase E 物理移管完了)
        - パス整合 refactor: 4軸を target-selection/ に統一
+[完了] Phase 4 Part 3（Step A-2 Query Fan-out 二段構造、2026-05-05 Part 3）
+       - shared/llm-adapters/anthropic-adapter.js: Sonnet 4.6 + Opus 4.7 ラッパ
+       - shared/schemas/intent_dimension.schema.json: JTBD 5次元 JSON Schema (ajv)
+       - master_query_fanout: layer=1 (主題分解) 10件 + layer=2 (micro-intent + JTBD) 62件
+       - 警戒バイアス [h] YMYL 上流フィルタ怠惰 を新規確立 (commit 50aba44 即時対応)
+       - shared/ (γ) lazy 構築方針の戦略的検証 = 成功
+       - Phase 2 主要実装タスク 1/7 達成
 
-次の作業: Phase 4 MVP Phase 2（自走システム本格稼働）
-  推奨第一手: Step A-2 Query Fan-out 二段構造に着手
-    - master_query_fanout テーブル投入 (Sonnet 4.6 で seed → sub_query → micro-intent)
-    - shared/llm-adapters/ + schemas/intent_dimension.schema.json を (γ) lazy 構築
-  並行待ち: 案A (Google API 整備、Daiki 環境作業)
-  shared/ 方針: (γ) lazy 構築 - A-2 / A-1 / 案C LLM 実行レイヤー着手時に必要分のみ作る
+次の作業: Phase 4 MVP Phase 2 残 6 タスク
+  推奨第一手 (Part 3 末で encode):
+    優先1: 案A (Google API 整備、Daiki 環境作業)
+           → Step A-1 の文脈充実の前提
+    優先2: タスク 2 SerpApi Adapter + master_competitor_corpus
+           → Step A-1 系列の最初、shared/ lazy 構築方針の継続検証
+    優先3: タスク 5 master_hcu_checklist (案B # 5、軽量、独立)
 
 その後の進行:
   Phase 4 MVP Phase 3: 学習ループ稼働、自走システム完成形
