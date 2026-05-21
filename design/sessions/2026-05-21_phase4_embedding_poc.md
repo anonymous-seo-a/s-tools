@@ -226,12 +226,28 @@ VOYAGE_API_KEY は .env に残るが副作用なし。
 2. **δ 較正規則** (V-3、クエリ長別バケット)
 3. **警戒バイアス [23]** の遵守 (fact 用語の系統明記)
 
-### 設計上の選択肢 (本セッションでは確定しない、段階B 着手時に判定)
+### B-1 設計確定 (本セッション末、2026-05-21、5 論点すべて Claude 推奨採用)
 
-- δ 較正を「クエリ長別バケット」ではなく「ratio 正規化」(self_max / comp_max) で扱うか
-- master_passage_embedding を post_id 単位で永続化するか、リライト session 毎に再計算か
-- competitor passage 取得を SerpApi rank 1〜3 から 1〜5 に拡張するか
-- 案C プロンプト内での 3 系統 (A/B/C) の重み付け
+| 論点 | 確定 |
+|---|---|
+| 1. δ 較正方式 | **クエリ長別バケット** (-0.05 / 0.0 / +0.05)。ratio 正規化は段階C 改善余地として保留 |
+| 2. embedding 永続化 | **post_id 単位永続 + 本文ハッシュで invalidate** |
+| 3. competitor passage 取得 | **rank 1〜3 維持** (最小性優先) |
+| 4. 案C プロンプト 3 系統重み付け | **段階B では別フィールド bundle のみ確定**、重み付けは案C 着手時に判定 |
+| 5. poc_run_id カラム | **session_id 置換** (master_rewrite_session.id FK 化) |
+
+### 段階B 作業分解 (B-2〜B-7)
+
+| ステップ | 内容 | 工数 |
+|---|---|---|
+| B-2 | テーブル本実装 (poc_run_id → session_id, content_hash 追加) + migration | 0.5 日 |
+| B-3 | embedding 永続化 (post_id × content_hash UNIQUE) | 1 日 |
+| B-4 | δ 較正モジュール切出し | 1 日 |
+| B-5 | 案C 入力 bundle API (3 系統返却) | 0.5 日 |
+| B-6 | smoke 置換 | 1 日 |
+| B-7 | smoke pass 確認 | 0.5 日 |
+
+合計 4.5 日。詳細は knowledge/05 V-A-2-6 参照。
 
 ---
 

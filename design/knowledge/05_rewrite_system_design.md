@@ -1090,7 +1090,7 @@ function deltaForQuery(text) {
 | 短句 δ=0.0 | 中間値、副作用なし |
 | 長文 δ=+0.05 | ★ 検出 (総量規制 etc.) 維持、target spec 仕様通り |
 
-### V-A-2-6. 段階B 本実装への申し送り
+### V-A-2-6. 段階B 本実装への申し送り (B-1 設計確定済、2026-05-21)
 
 #### 必須組込項目
 
@@ -1098,13 +1098,39 @@ function deltaForQuery(text) {
 2. **δ 較正規則** (V-A-2-5)
 3. **警戒バイアス [23]** の遵守 (fact 用語の系統明記)
 
-#### 設計上の未確定論点 (段階B 着手時に判定)
+#### 段階B B-1 設計確定 (2026-05-21、5 論点すべて Claude 推奨採用)
 
-- δ 較正を「クエリ長別バケット」ではなく「ratio 正規化」(self_max / comp_max) で扱うか
-- master_passage_embedding を post_id 単位で永続化するか、リライト session 毎に再計算か
-- competitor passage 取得を SerpApi rank 1〜3 から 1〜5 に拡張するか
-- 案C プロンプト内での 3 系統 (A/B/C) の重み付け
-- poc_run_id カラムを段階B でどう扱うか (恒久化 / 撤去 / session_id 置換)
+| 論点 | 確定 |
+|---|---|
+| 1. δ 較正方式 | **クエリ長別バケット** (-0.05 / 0.0 / +0.05)。ratio 正規化は段階C 改善余地として保留 |
+| 2. embedding 永続化 | **post_id 単位永続 + 本文ハッシュで invalidate**。post_id × content_hash UNIQUE、変更検知で自動再計算 |
+| 3. competitor passage 取得 | **rank 1〜3 維持**。既存 master_competitor_corpus と整合、最小性優先 |
+| 4. 案C プロンプト 3 系統重み付け | **段階B では別フィールド bundle のみ確定、重み付けは案C 着手時に判定**。責務分離 |
+| 5. poc_run_id カラム | **session_id 置換** (master_rewrite_session.id FK 化)。案C 統合時の接続性最優先、案D 4.M' 多対多と整合 |
+
+#### 段階B 作業分解 (B-1 後、B-2〜B-7 で実装)
+
+| ステップ | 内容 | 工数 |
+|---|---|---|
+| B-2 | テーブル本実装 (poc_run_id → session_id 置換、content_hash 列追加) + migration 整備 | 0.5 日 |
+| B-3 | embedding 永続化実装 (post_id × content_hash UNIQUE、変更検知 invalidate) | 1 日 |
+| B-4 | δ 較正モジュール切出し (deltaForQuery を専用 module 化) | 1 日 |
+| B-5 | 案C 入力 bundle API (3 系統 A/B/C 別フィールド返却) | 0.5 日 |
+| B-6 | smoke 置換 + 整備 | 1 日 |
+| B-7 | smoke pass 確認 | 0.5 日 |
+
+合計 4.5 日相当。
+
+#### 段階C (将来) で再評価する論点
+
+- δ 較正を ratio 正規化に切り替えるか (段階B post-deploy データ蓄積後)
+- competitor rank 拡張 (1〜3 → 1〜5) の必要性
+- 案C プロンプト 3 系統重み付け確定 (案C 着手時に並行判定)
+- master_passage_embedding を多モデル対応 (voyage 以外を試す)
+
+#### 設計上の未確定論点 (本セッションでは判定しない)
+
+- なし (B-1 で全 5 論点判定済)
 
 ---
 
