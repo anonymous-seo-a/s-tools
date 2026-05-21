@@ -952,6 +952,162 @@ CREATE INDEX idx_audit_changed_at ON master_audit_log(changed_at);
 
 ---
 
+## V-A-2. 網羅性軸 二系統並列構造（段階A PoC 2026-05-21 確定）
+
+### V-A-2-1. 動機
+
+段階A PoC (post 7170/11077/7196/7235/11063 で 5 archetype 検証) で構造的事実が判明:
+
+| 系統 | 答える問い | 判定方式 |
+|---|---|---|
+| **fact-set** | 「self に存在するか？」 | LLM 抽出 fact の trim+lowercase 一致 (包含テスト、binary) |
+| **embedding** | 「self の網羅深度が competitor 以上か？」 | passage cosine 比較 (深度評価、relative) |
+
+→ 両者は同じ「fact」「gap」を扱うように見えて **別の問いに答えている**。
+   互換ではなく **補完関係**。詳細は警戒バイアス [23] および
+   `sessions/2026-05-21_phase4_embedding_poc.md` を参照。
+
+### V-A-2-2. 新規テーブル (段階A PoC で導入)
+
+```sql
+-- passage 単位 embedding 格納 (self / competitor 同居)
+CREATE TABLE master_passage_embedding (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id       INTEGER,                    -- self の場合、competitor は NULL
+  competitor_url TEXT,                      -- competitor の場合、self は NULL
+  source_type   TEXT NOT NULL,              -- 'self' / 'competitor'
+  passage_idx   INTEGER NOT NULL,
+  text          TEXT NOT NULL,
+  char_count    INTEGER NOT NULL,
+  embedding     BLOB NOT NULL,              -- Float32Array バイナリ
+  dim           INTEGER NOT NULL,
+  model         TEXT NOT NULL,
+  created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  poc_run_id    TEXT NOT NULL,              -- 段階A は run 単位、段階B で再設計
+  CHECK (source_type IN ('self', 'competitor'))
+);
+
+-- Q[i] × competitor_max_cosine + δ baseline 保存
+CREATE TABLE master_query_coverage_baseline (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  query_fanout_id       INTEGER NOT NULL,
+  competitor_max_cosine REAL NOT NULL,
+  competitor_url_winner TEXT,
+  competitor_passage_idx INTEGER,
+  delta                 REAL NOT NULL,
+  model                 TEXT NOT NULL,
+  created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+  poc_run_id            TEXT NOT NULL,
+  notes                 TEXT,
+  FOREIGN KEY (query_fanout_id) REFERENCES master_query_fanout(id)
+);
+
+-- Q[i] / fact 単位 gap 判定 (judge_type で fact-set / embedding 2 系統並走)
+CREATE TABLE master_passage_gap (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id           INTEGER NOT NULL,
+  query_fanout_id   INTEGER,
+  target_text       TEXT NOT NULL,            -- Q[i] 文 or fact 文
+  target_kind       TEXT NOT NULL,            -- 'query' / 'fact'
+  fact_layer        INTEGER,                  -- fact 時 layer 番号
+  self_max_cosine   REAL,
+  competitor_max_cosine REAL,
+  delta             REAL,
+  gap_flag          INTEGER NOT NULL,
+  judge_type        TEXT NOT NULL,            -- 'embedding' / 'factset'
+  model             TEXT,
+  created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+  poc_run_id        TEXT NOT NULL,
+  notes             TEXT,
+  CHECK (target_kind IN ('query', 'fact')),
+  CHECK (judge_type IN ('embedding', 'factset')),
+  CHECK (gap_flag IN (0, 1)),
+  FOREIGN KEY (query_fanout_id) REFERENCES master_query_fanout(id)
+);
+```
+
+### V-A-2-3. テーブル責務分離
+
+```
+網羅性軸 (Information Gain)
+├── master_information_gain_score (fact-set 系、既存)
+│   役割: 包含テスト
+│   問い: 「この fact が self に存在するか」(binary)
+│   入力: master_fact_set + master_competitor_corpus.fact_set_snapshot
+│   出力: layer1/2 gap_count, notes.gap_fact_samples (列挙型)
+│
+└── master_passage_gap (embedding 系、新規)
+    役割: 深度評価
+    問い: 「self の網羅深度が competitor を超えるか」(relative)
+    入力: master_passage_embedding (self + competitor passages)
+    出力: self_max_cosine, competitor_max_cosine, gap_flag (per Q[i] or per fact)
+```
+
+### V-A-2-4. 案C LLM 実行レイヤーへの入力 bundle (3 系統)
+
+工程6'-A (Opus 4.7 分析) に渡す情報を 3 系統に整理:
+
+```
+A. 必須追加 fact (fact-set 由来)
+   source: master_information_gain_score.notes.gap_fact_samples
+   意味: 「self に全く存在しない」competitor union fact
+   LLM 指示: 「追加で書くべき」候補
+
+B. 深度不足 Q[i] (embedding 由来)
+   source: master_passage_gap WHERE target_kind='query' AND gap_flag=1 AND judge_type='embedding'
+   意味: 「Q[i] の網羅深度が competitor を下回る」サブクエリ
+   LLM 指示: 「該当 Q[i] 領域を厚く書く」方針
+
+C. 深度不足 fact (embedding 由来、限定)
+   source: master_passage_gap WHERE target_kind='fact' AND gap_flag=1 AND judge_type='embedding'
+           AND fact が factset_gap=0 (= self に含まれている)
+   意味: 「self に含むが、competitor より浅い」fact
+   LLM 指示: 「該当 fact 周辺を厚く書く」方針 (新規追加ではない)
+```
+
+### V-A-2-5. δ 較正規則 (クエリ長別バケット)
+
+```js
+function deltaForQuery(text) {
+  const len = text.length;
+  if (len <= 5)  return -0.05;   // 短語 (ブランド名等、cosine baseline 高、ノイズ吸収)
+  if (len <= 15) return  0.00;   // 短句 (中立、cosine 絶対差そのまま)
+  return                  0.05;   // 完全クレーム文 (target spec 標準)
+}
+```
+
+#### 適用箇所
+
+- query 単位判定: `deltaForQuery(sub_query.text)`
+- fact 単位判定: `deltaForQuery(fact.text)`
+- baseline 計算は competitor_max のみ (δ は判定時に適用、テーブルには適用済 δ も保存)
+
+#### 較正の経緯
+
+| バケット | 段階A 検証で確認された動作 |
+|---|---|
+| 短語 δ=-0.05 | post 11077 / 11063 で ▲ 偽陽性 8 件 → 全件 no-gap に flip = fact-set と一致 |
+| 短句 δ=0.0 | 中間値、副作用なし |
+| 長文 δ=+0.05 | ★ 検出 (総量規制 etc.) 維持、target spec 仕様通り |
+
+### V-A-2-6. 段階B 本実装への申し送り
+
+#### 必須組込項目
+
+1. **二系統並列維持** (V-A-2-3, V-A-2-4)
+2. **δ 較正規則** (V-A-2-5)
+3. **警戒バイアス [23]** の遵守 (fact 用語の系統明記)
+
+#### 設計上の未確定論点 (段階B 着手時に判定)
+
+- δ 較正を「クエリ長別バケット」ではなく「ratio 正規化」(self_max / comp_max) で扱うか
+- master_passage_embedding を post_id 単位で永続化するか、リライト session 毎に再計算か
+- competitor passage 取得を SerpApi rank 1〜3 から 1〜5 に拡張するか
+- 案C プロンプト内での 3 系統 (A/B/C) の重み付け
+- poc_run_id カラムを段階B でどう扱うか (恒久化 / 撤去 / session_id 置換)
+
+---
+
 ## V-B. Phase E 既存4テーブルとの統合方針（論点0 確定、2026-05-01）
 
 ### 確定事項
@@ -2345,11 +2501,12 @@ Phase 3: 学習ループ稼働（実工数 8.5〜13日）
 
 ---
 
-## XIV. 警戒すべき AI 側のバイアス（蓄積版、[1]〜[22] 通し番号統合）
+## XIV. 警戒すべき AI 側のバイアス（蓄積版、[1]〜[23] 通し番号統合）
 
 設計プロセスを通じて、AI（Claude）が陥りやすい以下のバイアスが特定された。次セッション以降の Claude はこれらに警戒する必要がある。
 
 本日 5 セッション (2026-05-05 Part 1〜5) で蓄積した識別子 [a]〜[m] と、過去セッション [1]〜[7] を **[1]〜[22] の通し番号** に統合。
+2026-05-21 段階A embedding PoC で [23] 追加。
 
 ### カテゴリ別グループ化
 
@@ -2360,8 +2517,9 @@ Phase 3: 学習ループ稼働（実工数 8.5〜13日）
 | C. プロンプト/LLM 整合バイアス | [13][15][16][21] | 4 |
 | D. 指示解釈・判断委任境界バイアス | [7][8] | 2 |
 | E. 外部 API/運用整合バイアス | [17][18][19][22] | 4 |
+| F. 概念・意味論バイアス | [23] | 1 |
 
-合計 22 件。
+合計 23 件。
 
 ### A. 設計判断バイアス
 
@@ -2558,6 +2716,26 @@ service-account-key.json や .env を git に混入させるリスク
 → 警戒バイアス [22] として登録、Phase 2 後半 / 本格運用で継続警戒必須
 ```
 
+#### [23] fact 概念の意味論曖昧バイアス (段階A embedding PoC 2026-05-21 で新規確立)
+```
+発動箇所: 段階A PoC (post 11077/7235/11063) で ▲ 逆方向 divergent 解釈時
+発動内容: fact-set (master_fact_set / IG Score) と embedding (master_passage_gap) を
+         同じ「fact」「gap」として扱い、片方を「正しい / 誤り」と誤断する誘惑
+
+構造的事実:
+  fact-set       = 包含テスト (self に存在するか、binary)
+  embedding      = 深度評価 (self の網羅深度が competitor 以上か、relative)
+  両者は別の問いに答えており、補完関係。互換ではない
+
+対処パターン:
+  1. master_information_gain_score (fact-set) と master_passage_gap (embedding) を統合しない
+  2. 案C プロンプトでは 3 系統 (A: 必須追加 / B: Q[i] 深度 / C: fact 深度) を明示
+  3. 「gap」「fact」の用語を文脈なしで使わない、必ず系統を明記
+
+→ 警戒バイアス [23] として登録、段階B 本実装で継続警戒必須
+   段階A PoC 詳細は sessions/2026-05-21_phase4_embedding_poc.md
+```
+
 ### バイアス番号の旧→新マッピング (本セッションで統合)
 
 | 旧 | 新 | 内容 |
@@ -2584,6 +2762,7 @@ service-account-key.json や .env を git に混入させるリスク
 | [l] | [20] | fact 抽出網羅性追求 |
 | [m] | [21] | LLM 出力構造化保証 |
 | 新規 | [22] | 環境変数値構造仮定 |
+| 新規 | [23] | fact 概念の意味論曖昧 (網羅性軸の二系統並列) |
 
 ---
 
