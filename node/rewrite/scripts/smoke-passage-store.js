@@ -56,6 +56,11 @@ async function fetchWpContent(postId) {
   console.log(`  plain_text chars=${struct.char_count}  passages=${passages.length}`);
 
   const source = { source_type: 'self', post_id: postId };
+  // smoke 冪等化: 既存 cache を消去 (B-3 永続化により previous run のデータが残るため)
+  const cleanedBefore = invalidateBySource(`post:${postId}`);
+  if (cleanedBefore > 0) {
+    console.log(`  pre-clean: invalidated ${cleanedBefore} existing rows for source_key=post:${postId}`);
+  }
 
   // --- 2. 1 回目 (cache miss)
   console.log('\n=== 2. 1 回目 (cache miss 期待) ===');
