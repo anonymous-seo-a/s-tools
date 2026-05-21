@@ -131,7 +131,92 @@ function extractCompetitorContent(html) {
   };
 }
 
+/**
+ * 段階A PoC 用: passage 分割関数 (additive、既存ロジック非接続)。
+ *
+ * 既存 extractSelfArticle / extractCompetitorContent の出力を入力に取り、
+ * 文字数上限 (既定 400) で passage 配列に分割する。境界優先順位:
+ *   1. sections[] (extractSelfArticle が返す heading 区切り) があればそれを基本単位
+ *   2. 上限超過したら句読点 (。!? ! ?) で更に分割
+ *   3. 句読点なしでも超過する場合は文字数で機械分割
+ *
+ * competitor 側は sections[] を持たないため plain_text 単一塊から開始する。
+ *
+ * @param {object} input
+ *   self: { sections: Array<{text:string}> } (extractSelfArticle 出力)
+ *   competitor: { plain_text: string } (extractCompetitorContent 出力)
+ * @param {object} [opts]
+ * @param {number} [opts.maxChars=400]
+ * @param {number} [opts.minChars=80]
+ * @returns {Array<{idx: number, text: string, char_count: number}>}
+ */
+function splitToPassages(input, opts = {}) {
+  const maxChars = opts.maxChars || 400;
+  const minChars = opts.minChars || 80;
+
+  const seeds = [];
+  if (Array.isArray(input.sections) && input.sections.length > 0) {
+    for (const s of input.sections) {
+      const t = (s.text || '').trim();
+      if (t) seeds.push(t);
+    }
+  } else if (typeof input.plain_text === 'string' && input.plain_text.trim()) {
+    seeds.push(input.plain_text.trim());
+  }
+
+  const out = [];
+  const punct = /([。！？!?])/g;
+
+  for (const seed of seeds) {
+    if (seed.length <= maxChars) {
+      out.push(seed);
+      continue;
+    }
+    const sentences = seed.split(punct).reduce((acc, cur, i, arr) => {
+      if (i % 2 === 0) {
+        const next = arr[i + 1] || '';
+        const merged = (cur + next).trim();
+        if (merged) acc.push(merged);
+      }
+      return acc;
+    }, []);
+
+    let buf = '';
+    for (const s of sentences) {
+      if (s.length >= maxChars) {
+        if (buf) {
+          out.push(buf);
+          buf = '';
+        }
+        for (let i = 0; i < s.length; i += maxChars) {
+          out.push(s.slice(i, i + maxChars));
+        }
+        continue;
+      }
+      if (buf.length + s.length > maxChars) {
+        out.push(buf);
+        buf = s;
+      } else {
+        buf = buf ? `${buf}${s}` : s;
+      }
+    }
+    if (buf) out.push(buf);
+  }
+
+  const merged = [];
+  for (const t of out) {
+    if (merged.length > 0 && t.length < minChars && merged[merged.length - 1].length + t.length <= maxChars) {
+      merged[merged.length - 1] = `${merged[merged.length - 1]}${t}`;
+    } else {
+      merged.push(t);
+    }
+  }
+
+  return merged.map((text, idx) => ({ idx, text, char_count: text.length }));
+}
+
 module.exports = {
   extractSelfArticle,
   extractCompetitorContent,
+  splitToPassages,
 };
