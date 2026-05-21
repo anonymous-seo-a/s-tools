@@ -2,7 +2,7 @@
 
 このファイルは、Claude Code 環境で新規セッションを開始するときに、Claudeに最初に渡すプロンプトとして使用する。
 
-最終更新: 2026年5月21日 (段階B 全 7 ステップ完了、案C 着手準備完了)
+最終更新: 2026年5月21日 (段階B 全 7 完了 + 案C C-A 設計確定、次セッションは C-B 実装着手)
 前提環境: Claude Code（s-tools/design/ 配下に全資産統合済み、s-tools/node/rewrite/ に Phase 2 6/7 完了 + embedding 二系統並列 本実装完了、shared/ (γ) lazy 構築 5 件済 = anthropic-adapter / intent_dimension.schema.json / serpapi-adapter / wp-structured (拡張済) / voyage-adapter）
 
 ---
@@ -72,33 +72,53 @@ const selfEmbed = await getOrComputeEmbeddings({ source: ..., plain_text, passag
 const judge = judgeGapFlag({ self_max, comp_max, query_text });
 ```
 
-# 案C LLM 実行レイヤー 着手項目 (Phase 2 残 1 タスク)
+# 案C LLM 実行レイヤー 進捗 (C-A 完了、Phase 2 残 1 タスク)
 
-## 案C 範囲 (knowledge/05 V-A-2-4 + 工程6'-A/B/C)
+## C-A 設計確定済 (2026-05-21 末、knowledge/05 V-A-3)
 
-工程6'-A: Opus 4.7 (分析)
-  入力: bundle (A/B/C 3 系統) + master_hcu_checklist + master_article_similarity α
-        + master_rules (Compliance)
-  出力: master_rewrite_session.analysis_output (リライト方針 JSON)
-        / high_risk_categories / policy_summary
+  C-1 工程6'-A 重み付け → Opus 4.7 委譲
+  C-2 工程6'-B フォーマット → 独自 JSON ({target_section, change_type, ...})
+  C-3 ★ filter 責務 → smoke 後判定
+  C-4 Compliance → seed 21 件 + 正規表現
+  C-5 smoke スコープ → post 11077 / qf 11
 
-工程6'-B: Sonnet 4.6 (差分生成)
-  入力: analysis_output + 元記事
-  出力: master_rewrite_diff (差分パッチ JSON)
+  追加確定:
+    analysis_output JSON 構造 (V-A-3-2)
+    rationale JSON 構造 (V-A-3-4)
+    情報伝搬フロー (V-A-3-5)
+    保護領域指示 = プロンプトのみ (V-A-3-6、上流変更なし)
+    bundle snapshot 保存 (V-A-3-7)
 
-工程6'-C: Compliance 事後検証
-  入力: 差分適用後 content + master_rules + master_ymyl_requirement
-  出力: master_rewrite_diff.rationale.compliance に違反履歴
+  パターンブロック ref 残留懸念解消:
+    10 記事実測で wp:block ref 0/10、entity 消失なし確認
 
-## 案C 設計上の論点 (着手時に判定)
+## 案C 作業分解 (C-A 完了後、残 4.5 日)
 
-| 論点 | 検討項目 |
-|---|---|
-| C-1 | 工程6'-A プロンプト設計 (3 系統 A/B/C の重み付け) |
-| C-2 | 工程6'-B 差分生成フォーマット (JSON Patch / unified diff / 独自) |
-| C-3 | ★ embedding 救出 fact のフィルタリング責務 (bundle 側 / プロンプト側) |
-| C-4 | Compliance Checker 実装 (master_rules 正規表現エンジン、V-E 仕様) |
-| C-5 | スコープ最小化 (smoke 1 記事 + 1 Q[i] でまず E2E 動作確認) |
+| ステップ | 内容 | 工数 | 状態 |
+|---|---|---|---|
+| C-A | 設計確定 | 0.5 日 | ✓ |
+| **C-B** | **工程6'-A Opus 4.7 実装** | **1.5 日** | **次着手** |
+| C-C | 工程6'-B Sonnet 4.6 実装 | 1.5 日 | |
+| C-D | 工程6'-C Compliance Checker | 1 日 | |
+| C-E | E2E smoke (6'-A → 6'-B → 6'-C 通し) | 1 日 | |
+| C-F | 既存 smoke 非破壊確認 + 段階C 申し送り | 0.5 日 | |
+
+## C-B 着手項目
+
+1. Opus 4.7 プロンプト設計 (システム + ユーザー)
+2. bundle 整形ロジック (JSON → 自然言語 or JSON 直接渡し)
+3. analysis_output JSON のパース + バリデーション
+4. session.notes に bundle snapshot 保存
+5. analysis_output → session 更新 (master_rewrite_session.analysis_output)
+6. high_risk_categories 判定 → status 更新ロジック
+7. C-B smoke (post 11077 で実 LLM 呼出 + analysis_output 確認)
+
+## C-B で判定すべき論点 (本セッション着手時に判定)
+
+- Opus 4.7 のプロンプト具体表現 (bundle を JSON のままか整形か)
+- bundle 要素を「絶対追加」「優先案」「補助」に Opus が分類する責務委譲範囲
+- analysis_output JSON Schema 検証 (ajv で structure 確認するか)
+- 高リスク判定の自動化アルゴリズム (キーワード検出 / LLM 自己申告)
 
 # プロジェクト構造 (2026-05-21 末)
 
@@ -195,17 +215,18 @@ s-tools/
 
 # 最初のタスク
 
-1. CLAUDE.md と knowledge/05_rewrite_system_design.md V-A-2 章を読み、現状を把握
+1. CLAUDE.md と knowledge/05_rewrite_system_design.md V-A-2 + V-A-3 章を読み、現状を把握
 2. 直近のセッション記録を読む:
-   - sessions/2026-05-21_stage_b_completion.md (段階B 完了、最新)
-   - sessions/2026-05-21_phase4_embedding_poc.md (段階A PoC + B-1 設計)
-3. 案C LLM 実行レイヤー着手:
-   - 案C C-1〜C-5 論点を Daiki に提示
-   - C-5 (smoke 最小スコープ) から着手するのが推奨
-   - 工程6'-A プロンプト設計 + 工程6'-B 差分生成フォーマット確定
+   - sessions/2026-05-21_case_c_design.md (案C C-A 設計確定、最新)
+   - sessions/2026-05-21_stage_b_completion.md (段階B 完了)
+3. C-B 工程6'-A 実装着手:
+   - Opus 4.7 プロンプト設計を Daiki に提示
+   - bundle 整形ロジックの選択肢 (JSON / 自然言語) 提示
+   - C-A 確定の analysis_output JSON 構造を遵守
+   - bundle snapshot 保存ロジック (session.notes UPDATE) 実装
 4. 段階B 本実装 API (buildCaseCInputBundle / judgeGapFlag / getOrComputeEmbeddings) を流用
 
-それでは案C 着手から進めてください。
+それでは C-B から進めてください。
 ```
 
 ---

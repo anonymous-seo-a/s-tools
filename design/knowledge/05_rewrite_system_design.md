@@ -1134,6 +1134,143 @@ function deltaForQuery(text) {
 
 ---
 
+## V-A-3. 案C LLM 実行レイヤー C-A 設計確定（2026-05-21）
+
+段階B 完了後の案C 着手時に C-A (設計確定) で確定した事項。
+工程6'-A (Opus 4.7) / 6'-B (Sonnet 4.6) / 6'-C (Compliance) の JSON 構造と情報伝搬。
+
+### V-A-3-1. C-1〜C-5 設計判断 (全 Claude 推奨採用)
+
+| 論点 | 確定 |
+|---|---|
+| C-1 工程6'-A プロンプト 3 系統重み付け | Opus 4.7 に委譲、薄い枠組み |
+| C-2 工程6'-B 差分生成フォーマット | 独自 JSON: `{target_section, change_type, content_before, content_after}` |
+| C-3 ★ embedding 救出 fact フィルタリング | smoke 後判定 (段階B 申し送り通り) |
+| C-4 Compliance Checker | seed 21 件 + 正規表現、master_ymyl_requirement は別工程 |
+| C-5 smoke 最小スコープ | post 11077 / qf 11 (★ 4 件出る既知データ) |
+
+### V-A-3-2. analysis_output JSON 構造 (工程6'-A Opus 4.7 出力)
+
+`master_rewrite_session.analysis_output` に格納:
+
+```json
+{
+  "structural_analysis": "string",      // 200〜500 字
+  "rewrite_policy": [
+    {
+      "policy_text": "string",
+      "priority": 1,
+      "uses_bundle_refs": {              // bundle.* の index 配列
+        "required_additions": [0, 2],
+        "shallow_queries": [0],
+        "shallow_facts": [1, 3]
+      },
+      "target_change_types": ["rewrite_paragraph"],
+      "target_change_categories": ["paragraph_rewrite"]
+    }
+  ],
+  "high_risk_categories": [],            // 案K 5 カテゴリ - 1 (low_confidence_output は除く)
+  "confidence": "high" | "medium" | "low",
+  "protected_blocks_acknowledged": true
+}
+```
+
+### V-A-3-3. master_rewrite_diff レコード生成 (工程6'-B Sonnet 4.6 出力)
+
+V-A 既定の change_type 9 種 / change_category 8 種 / risk_flag 4 種から LLM 選択。
+content_before / content_after は HTML 文字列（cheerio パース検証必須）。
+
+### V-A-3-4. rationale JSON 構造 (学習ループ接続点)
+
+```json
+{
+  "primary_source": "fact_set_required_addition" | "embedding_shallow_query" |
+                    "embedding_shallow_fact" | "hcu_violation" | "compliance_rule",
+  "bundle_refs": {
+    "required_additions": [],
+    "shallow_queries": [],
+    "shallow_facts": []
+  },
+  "compliance": {
+    "violations": [],
+    "ymyl_requirements_met": [],
+    "annotations_added": []
+  },
+  "evidence_refs": []
+}
+```
+
+### V-A-3-5. 情報伝搬フロー
+
+```
+[buildCaseCInputBundle] (段階B B-5)
+       ↓ bundle (A/B/C 3 系統)
+[master_rewrite_session.notes に bundle snapshot 保存] ★C-A-6
+       ↓
+[工程6'-A Opus 4.7] (analysis_output 生成)
+       入力: bundle + master_hcu_checklist + master_article_similarity α + master_rules + protected_blocks
+       ↓
+[案K 判定]
+       high_risk_categories 非空 → 'awaiting_policy_judgment'
+       空 → 'generating' → 工程6'-B
+       ↓
+[工程6'-B Sonnet 4.6] (master_rewrite_diff レコード群)
+       入力: analysis_output + 元記事 HTML + protected_blocks
+       ↓
+[工程6'-C Compliance Checker]
+       入力: diff.content_after + master_rules
+       出力: rationale.compliance 更新、risk_flag='regulation_citation' 追加
+       status='awaiting_diff_judgment'
+```
+
+### V-A-3-6. 保護領域指示 (上流変更なし、プロンプトのみ)
+
+実測で entity 消失なし確認済 (10 記事サンプル: wp:block ref 0/10、empty div 0/10)。
+**上流 wp-structured.js は変更しない**。代わりに 6'-A / 6'-B プロンプトに保護領域 CSS class set を明示注入:
+
+```
+<protected_regions>
+以下の CSS class を持つ <div> 配下は変更対象外:
+  - soico-cta-*  (CTA ブロック)
+  - box-###      (テンプレートブロック)
+  - ez-toc-*     (TOC プラグイン)
+</protected_regions>
+```
+
+### V-A-3-7. bundle snapshot 保存 (C-A-6)
+
+bundle 要素の index 参照を堅牢化するため、session 開始時に bundle 全体を JSON snapshot で保存:
+
+```js
+const bundle = buildCaseCInputBundle({ session_id, post_id, query_fanout_id });
+UPDATE master_rewrite_session SET notes=? WHERE id=?
+// notes JSON: { bundle, captured_at }
+```
+
+工程6'-A 以降は session.notes から bundle 復元、buildCaseCInputBundle 再呼出は不要。
+
+### V-A-3-8. 案C 作業分解 (C-A 完了後)
+
+| ステップ | 内容 | 工数 |
+|---|---|---|
+| C-A | 設計確定 (本節) | 0.5 日 ✓ 完了 |
+| C-B | 工程6'-A 分析プロンプト + Opus 4.7 呼出 + analysis_output 保存 | 1.5 日 |
+| C-C | 工程6'-B 差分生成プロンプト + Sonnet 4.6 呼出 + master_rewrite_diff 投入 | 1.5 日 |
+| C-D | 工程6'-C Compliance Checker 実装 (master_rules 正規表現) | 1 日 |
+| C-E | E2E smoke (post 11077 / qf 11、6'-A → 6'-B → 6'-C 通し) | 1 日 |
+| C-F | 既存 smoke 非破壊確認 + 段階C 申し送り | 0.5 日 |
+
+合計 5 日 (C-A 含めて段階B 後の案C 全体)。
+
+### V-A-3-9. 段階C で再評価する論点
+
+- bundle 構造の重み付け (案C プロンプト改善時)
+- content_before/after の独自 JSON 化 (cheerio パース失敗が多発する場合)
+- protected_regions の CSS class set 動的取得 (config 化)
+- WordPress raw context 取得権限の整備 (将来、Gutenberg block JSON 直接処理)
+
+---
+
 ## V-B. Phase E 既存4テーブルとの統合方針（論点0 確定、2026-05-01）
 
 ### 確定事項
