@@ -91,6 +91,101 @@ async function runGenerationPipeline(job, conn) {
   return { session_id };
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Step β-2: WP 適用 (apply step)
+//   - approved diff を 1 件ずつ WP content 内で content_before を search → content_after に置換
+//   - 全件成功で WP PUT (atomically)
+//   - 1 件でも失敗すれば dry-run 結果としてエラー返し、WP は触らない
+//   - 適用前 WP HTML を wp_snapshot_before_apply に保存 (ロールバック用)
+//   - hallucination 旧 diff (content_before 短すぎ) は事前に排除
+// ─────────────────────────────────────────────────────────────────────
+
+const APPLY_MIN_CONTENT_BEFORE_LEN = 50; // これ未満は LLM hallucination 推定で拒否
+
+function decodeHtmlEntities(s) {
+  return s
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#?(\w+);/g, (m, e) => ({ apos: "'", nbsp: ' ' }[e] || m));
+}
+
+async function fetchWpPost(postId) {
+  const raw = (process.env.WP_API_BASE_URL || '').replace(/\/$/, '');
+  if (!raw) throw new Error('WP_API_BASE_URL not set');
+  const base = raw.endsWith('/wp-json/wp/v2') ? raw : `${raw}/wp-json/wp/v2`;
+  // context=edit は Application Password の権限で 401 になり得る。
+  // context=view (default) の content.rendered を取得 + entity decode で extractSelfArticle の raw_html_block と一致させる。
+  const url = `${base}/posts/${postId}`;
+  const auth = Buffer.from(`${process.env.WP_API_USERNAME}:${process.env.WP_API_APP_PASSWORD}`).toString('base64');
+  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+  if (!res.ok) throw new Error(`WP fetch ${postId}: HTTP ${res.status}`);
+  const p = await res.json();
+  const rendered = p.content?.rendered || '';
+  return { title: p.title?.rendered || '', content_raw: decodeHtmlEntities(rendered) };
+}
+
+async function updateWpPost(postId, contentHtml) {
+  const raw = (process.env.WP_API_BASE_URL || '').replace(/\/$/, '');
+  const base = raw.endsWith('/wp-json/wp/v2') ? raw : `${raw}/wp-json/wp/v2`;
+  const url = `${base}/posts/${postId}`;
+  const auth = Buffer.from(`${process.env.WP_API_USERNAME}:${process.env.WP_API_APP_PASSWORD}`).toString('base64');
+  const res = await fetch(url, {
+    method: 'POST', // WP REST は POST で update (PUT も可)
+    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: contentHtml }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`WP update ${postId}: HTTP ${res.status} ${t.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+function planApply({ session, diffs, wpContent }) {
+  // approved diff だけ、かつ content_before が安全長以上、かつ WP に含まれる、を planned に
+  const planned = [];
+  const skipped = [];
+  for (const d of diffs) {
+    if (d.daiki_judgment !== 'approved') {
+      skipped.push({ diff_id: d.id, reason: `not approved (${d.daiki_judgment})` });
+      continue;
+    }
+    const before = (d.content_before || '').trim();
+    const after = d.daiki_edit_content || d.content_after || '';
+    if (before.length < APPLY_MIN_CONTENT_BEFORE_LEN) {
+      skipped.push({ diff_id: d.id, reason: `content_before too short (${before.length}c, hallucination?)` });
+      continue;
+    }
+    if (!after) {
+      skipped.push({ diff_id: d.id, reason: 'content_after empty' });
+      continue;
+    }
+    if (!wpContent.includes(before)) {
+      skipped.push({ diff_id: d.id, reason: 'content_before not found in WP content' });
+      continue;
+    }
+    planned.push({ diff_id: d.id, target_section: d.target_section, before_len: before.length, after_len: after.length });
+  }
+  return { planned, skipped };
+}
+
+function applyDiffsToHtml(html, diffs) {
+  let out = html;
+  for (const d of diffs) {
+    const before = (d.content_before || '').trim();
+    const after = d.daiki_edit_content || d.content_after || '';
+    // first occurrence のみ置換 (重複時の暴走防止)
+    const idx = out.indexOf(before);
+    if (idx < 0) throw new Error(`apply: content_before not found for diff #${d.id}`);
+    out = out.slice(0, idx) + after + out.slice(idx + before.length);
+  }
+  return out;
+}
+
 const VALID_SESSION_STATUSES = new Set([
   'planned',
   'analyzing',
@@ -326,6 +421,106 @@ function buildRouter() {
       return res.json({ count: rows.length, items: rows });
     } catch (e) {
       console.error('[GET /judgment/query-fanouts]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/rewrite/judgment/sessions/:id/apply
+  //   body: { dry_run?: boolean }
+  //   approved diff を 1 件ずつ WP content に適用 (string match)、全件成功で PUT。
+  //   dry_run=true なら計画 (planned / skipped) を返すだけで WP は触らない。
+  router.post('/sessions/:id/apply', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
+      const dryRun = !!(req.body && req.body.dry_run);
+      const conn = open();
+      const session = conn.prepare(`SELECT id, post_id, status, wp_apply_completed_at FROM master_rewrite_session WHERE id=?`).get(id);
+      if (!session) return res.status(404).json({ error: 'session not found', id });
+      if (!dryRun && session.wp_apply_completed_at) {
+        return res.status(409).json({ error: 'already applied', wp_apply_completed_at: session.wp_apply_completed_at });
+      }
+      const diffs = conn.prepare(
+        `SELECT id, diff_order, target_section, change_type, daiki_judgment, daiki_edit_content,
+                content_before, content_after
+         FROM master_rewrite_diff WHERE session_id=? ORDER BY diff_order`
+      ).all(id);
+      const wp = await fetchWpPost(session.post_id);
+      const plan = planApply({ session, diffs, wpContent: wp.content_raw });
+
+      if (plan.planned.length === 0) {
+        return res.json({
+          dry_run: dryRun, post_id: session.post_id, applied: false,
+          planned: plan.planned, skipped: plan.skipped,
+          reason: 'no diffs to apply',
+        });
+      }
+
+      if (dryRun) {
+        return res.json({
+          dry_run: true, post_id: session.post_id, applied: false,
+          planned: plan.planned, skipped: plan.skipped,
+        });
+      }
+
+      // 実適用
+      conn.prepare(
+        `UPDATE master_rewrite_session
+         SET wp_snapshot_before_apply=?, wp_apply_started_at=CURRENT_TIMESTAMP
+         WHERE id=?`
+      ).run(wp.content_raw, id);
+
+      const plannedDiffs = diffs.filter((d) => plan.planned.some((p) => p.diff_id === d.id));
+      const newHtml = applyDiffsToHtml(wp.content_raw, plannedDiffs);
+      await updateWpPost(session.post_id, newHtml);
+
+      conn.prepare(
+        `UPDATE master_rewrite_session
+         SET wp_apply_completed_at=CURRENT_TIMESTAMP, status='completed', completed_at=CURRENT_TIMESTAMP
+         WHERE id=?`
+      ).run(id);
+
+      const applyMark = conn.prepare(`UPDATE master_rewrite_diff SET applied_to_wp=1, applied_at=CURRENT_TIMESTAMP WHERE id=?`);
+      for (const p of plan.planned) applyMark.run(p.diff_id);
+
+      return res.json({
+        dry_run: false, post_id: session.post_id, applied: true,
+        planned: plan.planned, skipped: plan.skipped,
+        applied_count: plan.planned.length,
+      });
+    } catch (e) {
+      console.error('[POST /judgment/sessions/:id/apply]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/rewrite/judgment/sessions/:id/rollback
+  //   wp_snapshot_before_apply で WP を上書き、status を awaiting_diff_judgment に戻す
+  router.post('/sessions/:id/rollback', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
+      const conn = open();
+      const session = conn.prepare(
+        `SELECT id, post_id, wp_snapshot_before_apply, wp_apply_completed_at
+         FROM master_rewrite_session WHERE id=?`
+      ).get(id);
+      if (!session) return res.status(404).json({ error: 'session not found', id });
+      if (!session.wp_apply_completed_at) return res.status(409).json({ error: 'not applied yet' });
+      if (!session.wp_snapshot_before_apply) return res.status(409).json({ error: 'no snapshot saved' });
+
+      await updateWpPost(session.post_id, session.wp_snapshot_before_apply);
+
+      conn.prepare(
+        `UPDATE master_rewrite_session
+         SET wp_apply_completed_at=NULL, completed_at=NULL, status='awaiting_diff_judgment'
+         WHERE id=?`
+      ).run(id);
+      conn.prepare(`UPDATE master_rewrite_diff SET applied_to_wp=0, applied_at=NULL WHERE session_id=?`).run(id);
+
+      return res.json({ rolled_back: true, post_id: session.post_id });
+    } catch (e) {
+      console.error('[POST /judgment/sessions/:id/rollback]', e);
       return res.status(500).json({ error: e.message });
     }
   });

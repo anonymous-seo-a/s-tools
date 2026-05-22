@@ -156,4 +156,13 @@ export const api = {
     request(jobId ? `/api/rewrite/judgment/generation/${jobId}` : '/api/rewrite/judgment/generation'),
   getQueryFanouts: () =>
     request('/api/rewrite/judgment/query-fanouts'),
+
+  // β-2: WP 適用 (dry-run / 本適用 / ロールバック)
+  applySession: (sessionId, { dryRun = false } = {}) =>
+    request(`/api/rewrite/judgment/sessions/${sessionId}/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ dry_run: dryRun }),
+    }),
+  rollbackSession: (sessionId) =>
+    request(`/api/rewrite/judgment/sessions/${sessionId}/rollback`, { method: 'POST' }),
 };

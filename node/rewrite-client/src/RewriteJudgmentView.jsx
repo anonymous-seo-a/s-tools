@@ -206,6 +206,8 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
   const [loading, setLoading] = useState(false);
   const [busyDiffId, setBusyDiffId] = useState(null);
   const [complianceJob, setComplianceJob] = useState(null);
+  const [applyPlan, setApplyPlan] = useState(null);
+  const [applying, setApplying] = useState(false);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -248,6 +250,40 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
     }, 3000);
     return () => clearInterval(t);
   }, [complianceJob, sessionId, load, showToast]);
+
+  const handleDryRun = async () => {
+    setApplying(true); setApplyPlan(null);
+    try {
+      const r = await api.applySession(sessionId, { dryRun: true });
+      setApplyPlan(r);
+      showToast(`dry-run: planned=${r.planned.length} skipped=${r.skipped.length}`);
+    } catch (e) { showToast(e.message, 'error'); }
+    setApplying(false);
+  };
+
+  const handleApply = async () => {
+    if (!confirm('approved diff を WP に反映します。ロールバック可能ですが本番記事を書き換えます。続行?')) return;
+    setApplying(true);
+    try {
+      const r = await api.applySession(sessionId, { dryRun: false });
+      setApplyPlan(r);
+      showToast(r.applied ? `WP 反映完了: ${r.applied_count} 件適用` : 'WP 反映なし');
+      load();
+    } catch (e) { showToast(e.message, 'error'); }
+    setApplying(false);
+  };
+
+  const handleRollback = async () => {
+    if (!confirm('適用前の状態に WP を戻します。続行?')) return;
+    setApplying(true);
+    try {
+      await api.rollbackSession(sessionId);
+      setApplyPlan(null);
+      showToast('ロールバック完了');
+      load();
+    } catch (e) { showToast(e.message, 'error'); }
+    setApplying(false);
+  };
 
   const handleRunCompliance = async () => {
     try {
@@ -325,11 +361,65 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
           >
             {complianceJob?.status === 'running' ? 'compliance 実行中...' : 'compliance 実行'}
           </button>
+          <button
+            className="btn-apply btn-small"
+            onClick={handleDryRun}
+            disabled={applying}
+            title="approved diff を WP に適用したらどうなるか確認 (実 WP は触らない)"
+          >
+            {applying ? '...' : 'プレビュー'}
+          </button>
+          {!detail.wp_apply_completed_at ? (
+            <button
+              className="btn-approve btn-small"
+              onClick={handleApply}
+              disabled={applying || !(counts.approved > 0)}
+              title="approved diff を WP に反映"
+            >
+              {applying ? '適用中...' : 'WP に適用'}
+            </button>
+          ) : (
+            <button
+              className="btn-reject btn-small"
+              onClick={handleRollback}
+              disabled={applying}
+              title="適用前の WP HTML に戻す"
+            >
+              {applying ? '...' : 'ロールバック'}
+            </button>
+          )}
           <button className="btn-secondary btn-small" onClick={load} disabled={loading}>
             {loading ? '更新中...' : '再読込'}
           </button>
         </div>
       </div>
+
+      {applyPlan && (
+        <div style={{ padding: 12, background: '#e8f5e9', borderBottom: '1px solid #c8e6c9', fontSize: 12 }}>
+          <strong>{applyPlan.dry_run ? 'dry-run プレビュー' : applyPlan.applied ? 'WP 反映済' : '反映なし'}</strong>
+          {' '}post_id={applyPlan.post_id} · planned={applyPlan.planned.length} · skipped={applyPlan.skipped.length}
+          {applyPlan.planned.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ color: '#2e7d32', fontWeight: 600 }}>planned:</div>
+              {applyPlan.planned.map((p, i) => (
+                <div key={i} style={{ marginLeft: 12 }}>
+                  diff #{p.diff_id} · {p.target_section} · before {p.before_len}c → after {p.after_len}c
+                </div>
+              ))}
+            </div>
+          )}
+          {applyPlan.skipped.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ color: '#c62828', fontWeight: 600 }}>skipped:</div>
+              {applyPlan.skipped.map((s, i) => (
+                <div key={i} style={{ marginLeft: 12 }}>
+                  diff #{s.diff_id}: {s.reason}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {detail.diffs.length === 0 ? (
         <div className="loading">このセッションには diff がありません</div>
