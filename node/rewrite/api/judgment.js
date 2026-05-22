@@ -2,6 +2,12 @@
 
 const express = require('express');
 const { open } = require('../db');
+const { runComplianceCheck } = require('../llm-execution/compliance-runner');
+
+// in-memory job ストア (server プロセス再起動で消失、明示再実行で再投入)
+//   key: session_id (number)
+//   value: { status: 'running'|'completed'|'failed', started_at, completed_at, result?, error?, options }
+const complianceJobs = new Map();
 
 const VALID_SESSION_STATUSES = new Set([
   'planned',
@@ -148,6 +154,74 @@ function buildRouter() {
       return res.json(detail);
     } catch (e) {
       console.error('[GET /judgment/sessions/:id]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/rewrite/judgment/sessions/:id/compliance
+  //   body: { enableLayer2?: true }
+  //   非同期: 即座に { job_id, status: 'running' } を返し、裏で compliance-runner を実行。
+  //   進捗確認は GET /sessions/:id/compliance で取得。
+  router.post('/sessions/:id/compliance', (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: 'invalid id' });
+      }
+      const session = open().prepare(`SELECT id FROM master_rewrite_session WHERE id=?`).get(id);
+      if (!session) return res.status(404).json({ error: 'session not found', id });
+
+      const existing = complianceJobs.get(id);
+      if (existing && existing.status === 'running') {
+        return res.status(409).json({ error: 'compliance already running for this session', job: existing });
+      }
+
+      const enableLayer2 = req.body?.enableLayer2 !== false; // default true
+      const job = {
+        session_id: id,
+        status: 'running',
+        started_at: new Date().toISOString(),
+        completed_at: null,
+        result: null,
+        error: null,
+        options: { enableLayer2 },
+      };
+      complianceJobs.set(id, job);
+
+      // 非同期実行
+      (async () => {
+        try {
+          const r = await runComplianceCheck({ session_id: id, enableLayer2 });
+          job.status = 'completed';
+          job.result = r;
+        } catch (e) {
+          job.status = 'failed';
+          job.error = e.message || String(e);
+          console.error(`[compliance job session=${id}]`, e);
+        } finally {
+          job.completed_at = new Date().toISOString();
+        }
+      })();
+
+      return res.status(202).json({ session_id: id, status: 'running', started_at: job.started_at, options: job.options });
+    } catch (e) {
+      console.error('[POST /judgment/sessions/:id/compliance]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/rewrite/judgment/sessions/:id/compliance
+  router.get('/sessions/:id/compliance', (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: 'invalid id' });
+      }
+      const job = complianceJobs.get(id);
+      if (!job) return res.status(404).json({ error: 'no compliance job for this session', id });
+      return res.json(job);
+    } catch (e) {
+      console.error('[GET /judgment/sessions/:id/compliance]', e);
       return res.status(500).json({ error: e.message });
     }
   });

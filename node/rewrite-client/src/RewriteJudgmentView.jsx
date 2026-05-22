@@ -59,6 +59,36 @@ function SessionRow({ s, selected, onSelect }) {
   );
 }
 
+function ViolationsList({ rationale }) {
+  let parsed = rationale;
+  if (typeof rationale === 'string') {
+    try { parsed = JSON.parse(rationale); } catch { return null; }
+  }
+  const violations = parsed?.compliance?.detected_violations;
+  if (!Array.isArray(violations) || violations.length === 0) return null;
+  return (
+    <div style={{ marginTop: 8, padding: 10, background: '#ffebee', border: '1px solid #ef9a9a', borderRadius: 6 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: '#c62828', marginBottom: 6 }}>
+        compliance violations ({violations.length})
+      </div>
+      {violations.map((v, i) => (
+        <div key={i} style={{ marginBottom: 6, fontSize: 12 }}>
+          <span style={{ background: '#c62828', color: 'white', padding: '1px 6px', borderRadius: 3, fontSize: 11, marginRight: 6 }}>
+            rule#{v.rule_id} L{v.detection_layer}{v.severity ? ` ${v.severity}` : ''}
+          </span>
+          <strong>{v.ng_text}</strong>
+          {v.reason && <div style={{ marginTop: 2, color: '#666' }}>{v.reason}</div>}
+          {v.evidence_snippet && (
+            <div style={{ marginTop: 2, padding: 4, background: 'white', borderRadius: 3, fontFamily: 'monospace', fontSize: 11 }}>
+              {v.evidence_snippet}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DiffCard({ diff, onJudge, busyId }) {
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -125,6 +155,8 @@ function DiffCard({ diff, onJudge, busyId }) {
         </div>
       </div>
 
+      <ViolationsList rationale={diff.rationale} />
+
       {diff.daiki_judgment === 'rejected' && (diff.daiki_reject_reason || diff.daiki_reject_note) && (
         <div style={{ marginTop: 8, padding: 8, background: '#ffebee', borderRadius: 6, fontSize: 12 }}>
           <strong>却下理由:</strong> {diff.daiki_reject_reason || '—'}
@@ -173,6 +205,7 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busyDiffId, setBusyDiffId] = useState(null);
+  const [complianceJob, setComplianceJob] = useState(null);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -185,6 +218,46 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
     }
     setLoading(false);
   }, [sessionId, showToast]);
+
+  // セッション切替時に compliance job 状態もリセット & 取得
+  useEffect(() => {
+    setComplianceJob(null);
+    if (!sessionId) return;
+    api.getComplianceJob(sessionId)
+      .then((job) => setComplianceJob(job))
+      .catch(() => {}); // job 未存在は無視 (404)
+  }, [sessionId]);
+
+  // compliance job が running 中の polling
+  useEffect(() => {
+    if (!complianceJob || complianceJob.status !== 'running') return;
+    const t = setInterval(async () => {
+      try {
+        const j = await api.getComplianceJob(sessionId);
+        setComplianceJob(j);
+        if (j.status !== 'running') {
+          clearInterval(t);
+          load(); // 違反が rationale に反映されたので detail を再ロード
+          if (j.status === 'completed') {
+            showToast(`compliance 完了: ${j.result?.diffs_with_violations || 0} / ${j.result?.diffs_scanned || 0} diff で違反 (total ${j.result?.total_violations || 0})`);
+          } else {
+            showToast(`compliance 失敗: ${j.error || 'unknown'}`, 'error');
+          }
+        }
+      } catch (_) {} // 一時的なエラーは無視 (次回 tick で再試行)
+    }, 3000);
+    return () => clearInterval(t);
+  }, [complianceJob, sessionId, load, showToast]);
+
+  const handleRunCompliance = async () => {
+    try {
+      const j = await api.startComplianceJob(sessionId, { enableLayer2: true });
+      setComplianceJob(j);
+      showToast('compliance 実行開始 (約 60-90 秒)');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -237,9 +310,25 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
             </div>
           )}
         </div>
-        <button className="btn-secondary btn-small" onClick={load} disabled={loading}>
-          {loading ? '更新中...' : '再読込'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          {complianceJob && complianceJob.status === 'completed' && complianceJob.result && (
+            <span style={{ fontSize: 11, color: '#666', alignSelf: 'center' }}>
+              compliance: {complianceJob.result.diffs_with_violations}/{complianceJob.result.diffs_scanned} diff 違反
+              (L2 calls={complianceJob.result.layer2_llm_calls})
+            </span>
+          )}
+          <button
+            className={complianceJob?.status === 'running' ? 'btn-secondary btn-small' : 'btn-apply btn-small'}
+            onClick={handleRunCompliance}
+            disabled={complianceJob?.status === 'running'}
+            title="master_rules verified を全 diff に適用 (Layer 1+2)"
+          >
+            {complianceJob?.status === 'running' ? 'compliance 実行中...' : 'compliance 実行'}
+          </button>
+          <button className="btn-secondary btn-small" onClick={load} disabled={loading}>
+            {loading ? '更新中...' : '再読込'}
+          </button>
+        </div>
       </div>
 
       {detail.diffs.length === 0 ? (

@@ -137,4 +137,12 @@ export const api = {
     request(`/api/rewrite/judgment/sessions/${id}`),
   updateDiffJudgment: (id, body) =>
     request(`/api/rewrite/judgment/diffs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  startComplianceJob: (sessionId, opts = {}) =>
+    request(`/api/rewrite/judgment/sessions/${sessionId}/compliance`, {
+      method: 'POST',
+      body: JSON.stringify({ enableLayer2: opts.enableLayer2 !== false }),
+    }),
+  getComplianceJob: (sessionId) =>
+    request(`/api/rewrite/judgment/sessions/${sessionId}/compliance`),
 };
