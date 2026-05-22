@@ -62,7 +62,9 @@ const SYSTEM_PROMPT = `あなたは SEO リライト差分生成者 (YMYL 領域
 1. 各 rewrite_policy を具体的な diff 1〜${MAX_DIFFS_PER_POLICY} 件に展開
 2. 全体で最大 ${MAX_DIFFS_TOTAL} 件まで (priority 上位を優先、過剰分割禁止)
 3. target_section / change_type / change_category / risk_flag を選択
-4. content_before (既存箇所) と content_after (提案) を HTML 文字列で生成
+4. content_after (提案) を HTML 文字列で生成
+   content_before は target_section が h*#… で見出し一致するなら server が原 HTML を自動補填するため、null または空文字でよい
+   (meta:* / outline:* / p#… 等の場合のみ LLM 出力が DB に残るため content_before を生成)
 5. rationale JSON で根拠を記述 (uses_bundle_refs 由来を反映)
 6. 保護領域 CSS class set 配下は変更対象から除外
 
@@ -74,7 +76,7 @@ const SYSTEM_PROMPT = `あなたは SEO リライト差分生成者 (YMYL 領域
       "target_section": "string (例: 'h2#申込手順', 'p#3-2', 'meta:title')",
       "change_type": "${CHANGE_TYPES.join(' | ')}",
       "change_category": "${CHANGE_CATEGORIES.join(' | ')}",
-      "content_before": "HTML 文字列 (insert系では null 可)",
+      "content_before": "null 推奨 (h*#… 系では server が補填、meta:*/outline:*/p#… のみ LLM 出力を保持)",
       "content_after":  "HTML 文字列 (delete系では null 可)",
       "rationale": {
         "primary_source": "fact_set_required_addition | embedding_shallow_query | embedding_shallow_fact | hcu_violation | compliance_rule",
@@ -186,7 +188,7 @@ ${protectedRegions}
   sections.push(`# 指示
 analysis_output.rewrite_policy 各要素を、priority 順に最大 ${MAX_DIFFS_TOTAL} 件の diff へ展開せよ。
 - 1 policy → 1〜${MAX_DIFFS_PER_POLICY} 件
-- content_before は元記事 plain_text と整合させる (存在する文言を抽出)
+- content_before: target_section が h*#… なら null でよい (server 補填)、meta:*/outline:*/p#… のみ既存文言を抽出
 - content_after は妥当な HTML 構造 (cheerio パース可能)
 - analysis_output.high_risk_categories 該当の policy は対応する diff で risk_flag をセット
 - 上記スキーマに従い JSON のみで応答`);

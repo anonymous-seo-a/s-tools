@@ -22,7 +22,7 @@
 const cheerio = require('cheerio');
 const db = require('../db');
 const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
-const { extractSelfArticle } = require('../../shared/wp-structured');
+const { extractSelfArticle, findSectionByTargetSection } = require('../../shared/wp-structured');
 const {
   SYSTEM_PROMPT,
   buildDiffUserPrompt,
@@ -192,15 +192,25 @@ async function runDiffGeneration({ session_id }) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
+  // content_before は target_section が "h*#…" で原 HTML から解決できる場合は
+  // server side で raw_html_block を補填する (LLM 出力の hallucination を排除)。
+  // meta:* / p#… / outline:* / 見つからない見出しは LLM 出力をそのまま使う。
+  let server_resolved_count = 0;
   const tx = conn.transaction((rows) => {
     rows.forEach((d, idx) => {
+      let contentBefore = d.content_before ?? null;
+      const sec = findSectionByTargetSection(struct, d.target_section);
+      if (sec && sec.raw_html_block) {
+        contentBefore = sec.raw_html_block;
+        server_resolved_count++;
+      }
       insertDiff.run(
         session_id,
         idx + 1,
         d.target_section,
         d.change_type,
         d.change_category,
-        d.content_before ?? null,
+        contentBefore,
         d.content_after ?? null,
         JSON.stringify(d.rationale || {}),
         d.estimated_impact ? JSON.stringify(d.estimated_impact) : null,
@@ -216,6 +226,7 @@ async function runDiffGeneration({ session_id }) {
   try { notesObj = JSON.parse(session.notes || '{}'); } catch {}
   notesObj.diff_errors = errors;
   notesObj.diff_parsed_total = diffs.length;
+  notesObj.content_before_server_resolved = server_resolved_count;
 
   conn.prepare(
     `UPDATE master_rewrite_session
@@ -236,6 +247,7 @@ async function runDiffGeneration({ session_id }) {
     session_id,
     diffs_inserted: accepted.length,
     diffs_rejected: errors.length,
+    content_before_server_resolved: server_resolved_count,
     errors,
     usage: llmRes.usage,
     status: 'awaiting_diff_judgment',

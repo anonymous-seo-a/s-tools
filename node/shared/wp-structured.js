@@ -62,41 +62,47 @@ function extractSelfArticle(html) {
     if (text) headings.push({ level, text });
   });
 
+  // sections[]: 見出しごとに「見出しタグ + 次見出し直前まで」を sibling 単位で集約。
+  // - text: <p>/<li> プレーンテキストの連結 (LLM プロンプト用、テーブル等は含まない)
+  // - raw_html_block: 原 HTML スニペット (content_before として apply step が信頼できる事実)
   const sections = [];
-  let current = { heading: null, level: null, parts: [] };
+  $(HEADING_TAGS.join(',')).each((_, el) => {
+    const $h = $(el);
+    const tag = el.tagName.toLowerCase();
+    const level = Number(tag.slice(1));
+    const heading = normalizeWhitespace($h.text());
+    if (!heading) return;
 
-  $('body').length ? $('body').children() : $.root().children();
-  const root = $('body').length ? $('body') : $.root();
+    const $body = $h.nextUntil(HEADING_TAGS.join(','));
 
-  root.find('*').each((_, el) => {
-    const tag = el.tagName?.toLowerCase();
-    if (!tag) return;
-    if (HEADING_TAGS.includes(tag)) {
-      if (current.parts.length || current.heading) {
-        sections.push({
-          heading: current.heading,
-          level: current.level,
-          text: normalizeWhitespace(current.parts.join(' ')),
+    const headingHtml = $.html($h);
+    const bodyHtml = $body.toArray().map((node) => $.html(node)).join('');
+    const raw_html_block = headingHtml + bodyHtml;
+
+    const parts = [];
+    $body.each((_, n) => {
+      const $n = $(n);
+      const nTag = n.tagName?.toLowerCase();
+      if (nTag === 'p' || nTag === 'li') {
+        const t = normalizeWhitespace($n.text());
+        if (t) parts.push(t);
+      } else if (nTag) {
+        $n.find('p, li').each((_, p) => {
+          const t = normalizeWhitespace($(p).text());
+          if (t) parts.push(t);
         });
       }
-      current = {
-        heading: normalizeWhitespace($(el).text()),
-        level: Number(tag.slice(1)),
-        parts: [],
-      };
-    } else if (tag === 'p' || tag === 'li') {
-      const t = normalizeWhitespace($(el).text());
-      if (t) current.parts.push(t);
-    }
-  });
-  if (current.parts.length || current.heading) {
-    sections.push({
-      heading: current.heading,
-      level: current.level,
-      text: normalizeWhitespace(current.parts.join(' ')),
     });
-  }
 
+    sections.push({
+      heading,
+      level,
+      text: normalizeWhitespace(parts.join(' ')),
+      raw_html_block,
+    });
+  });
+
+  const root = $('body').length ? $('body') : $.root();
   const plain_text = normalizeWhitespace(root.text());
 
   return {
@@ -105,6 +111,26 @@ function extractSelfArticle(html) {
     plain_text,
     char_count: plain_text.length,
   };
+}
+
+/**
+ * target_section ("h2#見出し" / "h3#見出し" / "h4#見出し") を sections[] から検索。
+ * 見つからなければ null。
+ *
+ * 制約: meta:* / p#…-… / outline:* は対象外 (null 返却)、apply step 側で別途解決。
+ *
+ * @param {{sections: Array<{heading:string, level:number, raw_html_block?:string}>}} struct
+ * @param {string} target_section
+ * @returns {{heading:string, level:number, raw_html_block?:string, text?:string}|null}
+ */
+function findSectionByTargetSection(struct, target_section) {
+  if (!struct || !Array.isArray(struct.sections)) return null;
+  if (typeof target_section !== 'string') return null;
+  const m = /^h([1-4])#(.+)$/.exec(target_section.trim());
+  if (!m) return null;
+  const level = Number(m[1]);
+  const heading = m[2].trim();
+  return struct.sections.find((s) => s.level === level && s.heading === heading) || null;
 }
 
 /**
@@ -219,4 +245,5 @@ module.exports = {
   extractSelfArticle,
   extractCompetitorContent,
   splitToPassages,
+  findSectionByTargetSection,
 };

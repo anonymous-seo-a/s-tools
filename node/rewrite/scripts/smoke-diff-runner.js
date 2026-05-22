@@ -144,6 +144,25 @@ function assert(cond, msg) {
       assert(typeof rationale?.primary_source === 'string', `[${i}] rationale.primary_source 文字列`);
     });
 
+    // === 6.5. content_before server side 補完検証 ===
+    console.log('\n=== 6.5. content_before server side 補完検証 ===');
+    const headingDiffs = diffs.filter((d) => /^h[1-4]#/.test(d.target_section));
+    const resolved = headingDiffs.filter((d) => d.content_before && d.content_before.length > 50);
+    console.log(`  h*#… target=${headingDiffs.length} server_resolved=${resolved.length} runner_count=${diffRes.content_before_server_resolved}`);
+    assert(
+      headingDiffs.length === 0 || resolved.length === headingDiffs.length,
+      `h*#… 系 diff の content_before が全て server 補完 (${resolved.length}/${headingDiffs.length})`
+    );
+    assert(
+      diffRes.content_before_server_resolved === resolved.length,
+      `runner 報告 server_resolved 件数一致 (runner=${diffRes.content_before_server_resolved} db=${resolved.length})`
+    );
+    // 補完された content_before はテーブル含む生 HTML のはず
+    if (resolved.length > 0) {
+      const withTable = resolved.filter((d) => /<table/.test(d.content_before));
+      console.log(`  うち <table> 含有: ${withTable.length}/${resolved.length}`);
+    }
+
     // === 7. session 更新確認 ===
     console.log('\n=== 7. session 更新確認 ===');
     const sess = conn.prepare(
@@ -159,9 +178,10 @@ function assert(cond, msg) {
     console.log('\n=== 8. diff プレビュー (上位 3 件) ===');
     diffs.slice(0, 3).forEach((d, i) => {
       console.log(`  [${i + 1}] ${d.target_section} | type=${d.change_type} cat=${d.change_category} risk=${d.risk_flag} conf=${d.llm_confidence}`);
+      const beforeLen = d.content_before ? d.content_before.length : 0;
       const before = (d.content_before || '(null)').replace(/\s+/g, ' ').slice(0, 80);
       const after = (d.content_after || '(null)').replace(/\s+/g, ' ').slice(0, 80);
-      console.log(`      before: ${before}`);
+      console.log(`      before [${beforeLen}c]: ${before}`);
       console.log(`      after : ${after}`);
     });
   } finally {
