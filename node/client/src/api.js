@@ -122,4 +122,19 @@ export const api = {
     request('/api/rewrite/queue', { method: 'POST', body: JSON.stringify(body) }),
   updateRewriteQueue: (id, body) =>
     request(`/api/rewrite/queue/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  // ============================================================
+  // リライトシステム — Daiki 判定 UI (Phase 3 L0)
+  // ============================================================
+  getJudgmentSessions: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const q = qs.toString();
+    return request(`/api/rewrite/judgment/sessions${q ? `?${q}` : ''}`);
+  },
+  getJudgmentSession: (id) =>
+    request(`/api/rewrite/judgment/sessions/${id}`),
+  updateDiffJudgment: (id, body) =>
+    request(`/api/rewrite/judgment/diffs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 };

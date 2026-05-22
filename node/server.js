@@ -8,6 +8,7 @@ const monitorJobs = require('./monitor-jobs');
 const masterDb = require('./master-db');
 const mastersRoutes = require('./masters-routes');
 const rewriteQueueApi = require('./rewrite/api/queue');
+const rewriteJudgmentApi = require('./rewrite/api/judgment');
 const cron = require('node-cron');
 
 const app = express();
@@ -22,6 +23,7 @@ app.use('/api/masters', mastersRoutes);
 
 // リライトシステム API（Phase 4）
 app.use('/api/rewrite', rewriteQueueApi.buildRouter());
+app.use('/api/rewrite/judgment', rewriteJudgmentApi.buildRouter());
 
 // ============================================================
 // Gap Fill コアロジック（gap-fill.js から関数を再利用）
