@@ -493,6 +493,10 @@ CREATE INDEX idx_ann_product  ON master_annotations(product_id);
 CREATE INDEX idx_ann_category ON master_annotations(category);
 CREATE INDEX idx_ann_status   ON master_annotations(status);
 
+-- 段階C C-B-1 (2026-05-22) で schema v2 へ:
+--   rule_type の CHECK 撤廃 (新 rule_type 追加に対応、app-level validation)
+--   target_partner / detection_layer / pattern_hint 列追加 (Layer 2 LLM 検出対応)
+-- 既存 DB は node/rewrite/compliance/migration-master-rules-v2.js で migrate 済。
 CREATE TABLE master_rules (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   category          TEXT NOT NULL,
@@ -506,13 +510,18 @@ CREATE TABLE master_rules (
   verified_at       DATE,
   verified_by       TEXT,
   status            TEXT NOT NULL DEFAULT 'draft',
+  target_partner    TEXT,                                    -- v2: パートナー個別規制用 (例: 'acom')
+  detection_layer   INTEGER NOT NULL DEFAULT 1,              -- v2: 1=単純 indexOf / 2=LLM パターン検出
+  pattern_hint      TEXT,                                    -- v2: Layer 2 LLM への自然言語 hint
   created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CHECK (status IN ('draft', 'verified', 'deprecated')),
-  CHECK (rule_type IN ('禁止表現', '必須表現', '正式表記'))
+  CHECK (detection_layer IN (1, 2))
 );
 CREATE INDEX idx_rules_category ON master_rules(category);
 CREATE INDEX idx_rules_status   ON master_rules(status);
+CREATE INDEX idx_rules_layer    ON master_rules(detection_layer);
+CREATE INDEX idx_rules_partner  ON master_rules(target_partner);
 
 CREATE TABLE master_completeness_checklist (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
