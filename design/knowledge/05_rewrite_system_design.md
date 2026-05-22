@@ -1254,13 +1254,35 @@ UPDATE master_rewrite_session SET notes=? WHERE id=?
 | ステップ | 内容 | 工数 |
 |---|---|---|
 | C-A | 設計確定 (本節) | 0.5 日 ✓ 完了 |
-| C-B | 工程6'-A 分析プロンプト + Opus 4.7 呼出 + analysis_output 保存 | 1.5 日 |
-| C-C | 工程6'-B 差分生成プロンプト + Sonnet 4.6 呼出 + master_rewrite_diff 投入 | 1.5 日 |
+| C-B | 工程6'-A 分析プロンプト + Opus 4.7 呼出 + analysis_output 保存 | 1.5 日 ✓ 完了 (2026-05-21) |
+| C-C | 工程6'-B 差分生成プロンプト + Sonnet 4.6 呼出 + master_rewrite_diff 投入 | 1.5 日 ✓ 完了 (2026-05-22) |
 | C-D | 工程6'-C Compliance Checker 実装 (master_rules 正規表現) | 1 日 |
 | C-E | E2E smoke (post 11077 / qf 11、6'-A → 6'-B → 6'-C 通し) | 1 日 |
 | C-F | 既存 smoke 非破壊確認 + 段階C 申し送り | 0.5 日 |
 
 合計 5 日 (C-A 含めて段階B 後の案C 全体)。
+
+### V-A-3-10. C-C 実装上の確定事項 (2026-05-22)
+
+C-C 実装で V-A-3-3 仕様を以下のように具体化:
+
+| 項目 | C-C 確定 |
+|---|---|
+| プロンプト出力ラッパ | `{ "diffs": [...] }` の単一 root object (JSON parse 安定化) |
+| 1 policy → diff 数 | 1〜3 件、全体上限 15 件 (粒度暴走 [14] 防止、プロンプト記述 + クライアント側 slice) |
+| Sonnet maxTokens | 16384 (8192 では truncation 多発、smoke 11077 で実測 output=5886) |
+| truncation 耐性 | 切れた diffs 配列から「完全に閉じた diff オブジェクト」のみ抽出する独自 parser |
+| 不正 diff 処理 | validateDiff で skip し errors[] に蓄積、有効分のみ INSERT |
+| cheerio パース | content_before / content_after を都度 `cheerio.load`、null は許容 |
+| target_section 命名 | LLM 委譲 (meta:* / h2#text / p#section-para / outline:* の規約のみ記述) |
+| risk_flag 判定 | LLM 自己申告 (analysis_output.high_risk_categories を policy 経由で継承) |
+| status 遷移 | INSERT 成功時 'generating' → 'awaiting_diff_judgment' |
+
+C-C smoke 結果 (post 11077 / qf 11、rate_update 高リスクパス):
+  - Opus 4.7: 6993→1699 tokens / 31.4s
+  - Sonnet 4.6: 11220→5886 tokens / 81.7s
+  - diffs_inserted=7 / rejected=0 (全 enum + cheerio パス)
+  - 推定コスト ~$0.18 / 1 セッション
 
 ### V-A-3-9. 段階C で再評価する論点
 
