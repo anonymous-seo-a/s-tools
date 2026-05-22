@@ -211,16 +211,24 @@ async function runDiffGeneration({ session_id }) {
   });
   tx(accepted);
 
+  // errors[] を notes に追記 (root cause 観測用、空配列のときも明示記録)
+  let notesObj = {};
+  try { notesObj = JSON.parse(session.notes || '{}'); } catch {}
+  notesObj.diff_errors = errors;
+  notesObj.diff_parsed_total = diffs.length;
+
   conn.prepare(
     `UPDATE master_rewrite_session
      SET input_tokens_generation=?,
          output_tokens_generation=?,
          status='awaiting_diff_judgment',
-         generation_completed_at=CURRENT_TIMESTAMP
+         generation_completed_at=CURRENT_TIMESTAMP,
+         notes=?
      WHERE id=?`
   ).run(
     llmRes.usage?.input_tokens || null,
     llmRes.usage?.output_tokens || null,
+    JSON.stringify(notesObj),
     session_id
   );
 
