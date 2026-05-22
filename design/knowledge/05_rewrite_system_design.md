@@ -1257,7 +1257,7 @@ UPDATE master_rewrite_session SET notes=? WHERE id=?
 | C-B | 工程6'-A 分析プロンプト + Opus 4.7 呼出 + analysis_output 保存 | 1.5 日 ✓ 完了 (2026-05-21) |
 | C-C | 工程6'-B 差分生成プロンプト + Sonnet 4.6 呼出 + master_rewrite_diff 投入 | 1.5 日 ✓ 完了 (2026-05-22) |
 | C-D | 工程6'-C Compliance Checker 実装 (master_rules 単純 includes) | 1 日 ✓ 完了 (2026-05-22) |
-| C-E | E2E smoke (post 11077 / qf 11、6'-A → 6'-B → 6'-C 通し) | 1 日 |
+| C-E | E2E smoke (post 11077 / qf 11、6'-A → 6'-B → 6'-C 通し) | 1 日 ✓ 完了 (2026-05-22) |
 | C-F | 既存 smoke 非破壊確認 + 段階C 申し送り | 0.5 日 |
 
 合計 5 日 (C-A 含めて段階B 後の案C 全体)。
@@ -1312,6 +1312,52 @@ C-D smoke 結果 (post 11077 / qf 11、master_rules 21 件 verified 昇格):
   HTML 属性内 ng_text 誤検出可能性 → 21 件 ng_text はすべて日本語固有表現で HTML 属性混入リスクなし、許容。
   段階C で `.text()` 抽出ベース照合に格上げ可能 (V-A-3-12 候補)。
 
+### V-A-3-12. C-E 実装上の確定事項 + E2E 実測 (2026-05-22)
+
+C-E は post 11077 / qf 11 単一サンプル + 2 pass シナリオ (inject なし / あり) で確立。
+多 post smoke は実データ不足 (master_post_target_query 2 件 / master_query_fanout 72 件すべて seed="即日融資 比較") のため段階C送り。
+
+| 項目 | C-E 確定 |
+|---|---|
+| smoke 形態 | 独立 `smoke-e2e.js` (C-D smoke は compliance 単独テスト用に維持) |
+| シナリオ | 2 pass: A=inject なし (リアル検出率測定) / B=inject あり (検証経路確認) |
+| status 遷移 | 'awaiting_diff_judgment' で停止維持 (V-A-3-5 仕様通り、Daiki UI 判定待ち) |
+| 集計レポート | session_id / elapsed / tokens / diffs / violations / risk distribution / cost を 1 表出力 |
+| コスト概算 | Opus $15/$75 per MTok、Sonnet $3/$15 per MTok でクライアント側計算 |
+| 多 post 拡張 | 段階C 送り (target_query / qf データ整備が前提) |
+
+E2E 実測 (post 11077 / qf 11):
+
+```
+                      Pass A (inject=false)   Pass B (inject=true)
+session_id            18                      19
+Opus  elapsed         43.2s                   48.1s
+Sonnet elapsed        116.2s                  180.5s
+Opus  in/out          8569/2080               8569/2420
+Sonnet in/out         12998/7883              13354/13047
+diffs_inserted        5                       15
+diffs_rejected        2                       0
+violations (real)     0                       1 (inject)
+risk_flag_set         0                       1
+risk_distribution     {major_restructure:1,   {regulation_citation:2,
+                       regulation_citation:1,  null:9,
+                       rate_update:3}          rate_update:4}
+high_risk(analysis)   ["rate_update"]         []
+cost (USD)            $0.4418                 $0.5458
+                                              total $0.9876
+```
+
+重要観察:
+
+1. **リアル違反検出ゼロ (Pass A)**: LLM 上流の YMYL 制約注入が機能、6'-C は安全網として動作。
+2. **rejected=2 (Pass A)**: cheerio パース失敗 or enum エラーで 7 中 2 件 skip。検証経路が正しく機能。
+3. **Sonnet output token は run 間で大きく揺れる** (7883 vs 13047)。maxTokens=16384 でも安着、上限到達なし。
+4. **コスト $0.5/pass は見積 $0.18 から大幅超過** (Opus high_risk_categories 揺れ + Sonnet output 倍増)。段階C で prompt 簡素化候補。
+
+反証:
+  単一 post での E2E は overfitting リスクあり。LLM 安定性 + cost 安定性は多 post 実測 (段階C) で再評価。
+  C-E は「通し動作と検出経路の正しさ」のみ保証する。
+
 ### V-A-3-9. 段階C で再評価する論点
 
 - bundle 構造の重み付け (案C プロンプト改善時)
@@ -1321,6 +1367,9 @@ C-D smoke 結果 (post 11077 / qf 11、master_rules 21 件 verified 昇格):
 - C-D 照合の `.text()` 抽出ベース格上げ (HTML 属性混入リスク回避)
 - C-D 必須表現 / 正式表記 への対応拡張 (LLM 委譲 or キーワード文脈判定)
 - master_rules 21 件の verified 昇格運用 (現状 draft、smoke 内で一時昇格)
+- C-E 多 post smoke (target_query / qf データ整備が前提)
+- Sonnet output 揺れ抑制 + コスト圧縮 (prompt 簡素化、$0.5/pass → $0.2/pass 目標)
+- diffs_rejected 削減 (cheerio パース失敗の典型パターン分析 + プロンプト改善)
 
 ---
 

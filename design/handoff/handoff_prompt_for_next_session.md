@@ -2,7 +2,7 @@
 
 このファイルは、Claude Code 環境で新規セッションを開始するときに、Claudeに最初に渡すプロンプトとして使用する。
 
-最終更新: 2026年5月22日 (案C C-B + C-C + C-D 完了、次セッションは C-E E2E smoke 着手)
+最終更新: 2026年5月22日 (案C C-B〜C-E 完了、次セッションは C-F 既存 smoke 非破壊確認 + 段階C 申し送り)
 前提環境: Claude Code（s-tools/design/ 配下に全資産統合済み、s-tools/node/rewrite/ に Phase 2 6/7 完了 + embedding 二系統並列 本実装完了、shared/ (γ) lazy 構築 5 件済 = anthropic-adapter / intent_dimension.schema.json / serpapi-adapter / wp-structured (拡張済) / voyage-adapter）
 
 ---
@@ -92,42 +92,59 @@ const judge = judgeGapFlag({ self_max, comp_max, query_text });
   パターンブロック ref 残留懸念解消:
     10 記事実測で wp:block ref 0/10、entity 消失なし確認
 
-## 案C 作業分解 (C-D 完了後、残 1.5 日)
+## 案C 作業分解 (C-E 完了後、残 0.5 日)
 
 | ステップ | 内容 | 工数 | 状態 |
 |---|---|---|---|
 | C-A | 設計確定 | 0.5 日 | ✓ |
 | C-B | 工程6'-A Opus 4.7 実装 | 1.5 日 | ✓ (2026-05-21) |
 | C-C | 工程6'-B Sonnet 4.6 実装 | 1.5 日 | ✓ (2026-05-22) |
-| C-D | 工程6'-C Compliance Checker | 1 日 | ✓ (2026-05-22、post 11077 smoke pass) |
-| **C-E** | **E2E smoke (6'-A → 6'-B → 6'-C 通し)** | **1 日** | **次着手** |
-| C-F | 既存 smoke 非破壊確認 + 段階C 申し送り | 0.5 日 | |
+| C-D | 工程6'-C Compliance Checker | 1 日 | ✓ (2026-05-22) |
+| C-E | E2E smoke (2 pass + 集計レポート) | 1 日 | ✓ (2026-05-22、post 11077/qf 11 pass) |
+| **C-F** | **既存 smoke 非破壊確認 + 段階C 申し送り** | **0.5 日** | **次着手** |
 
-## C-D 完了状態 (2026-05-22)
+## C-E 完了状態 (2026-05-22)
 
 - 実装ファイル:
-  - `node/rewrite/llm-execution/compliance-checker.js` (純粋関数 checkDiffCompliance)
-  - `node/rewrite/llm-execution/compliance-runner.js` (runComplianceCheck = DB 読み + UPDATE)
-  - `node/rewrite/scripts/smoke-compliance-runner.js` (analysis → diff → compliance 通し + master_rules verified 一時昇格)
-- smoke (post 11077 / qf 11、"審査が甘い" inject): violations=1 検出、risk_flag 既存値保持確認
-- 単純 includes 採用、condition='常に' / 禁止表現のみ対象、master_rules 21 件 verified 一時昇格
-- knowledge/05 V-A-3-11 に C-D 確定事項を追記
+  - `node/rewrite/scripts/smoke-e2e.js` (2 pass + 集計レポート + master_rules verified 一時昇格)
+- 実測 (post 11077 / qf 11):
+  - リアル違反検出 (Pass A inject=false): **0 件** (LLM 上流フィルタ機能)
+  - inject 検出 (Pass B): 1 件 + risk_flag セット成功
+  - cost: $0.99/2 pass (見積 $0.18 から大幅超過、段階C で prompt 簡素化候補)
+  - Sonnet output 揺れ大 (7883→13047)、maxTokens=16384 で安着
+- knowledge/05 V-A-3-12 に C-E 確定事項 + 実測 + 段階C 申し送り 3 項目を追記
 
-## C-E 着手項目
+## C-F 着手項目
 
-1. C-D smoke (本実装 6'-A → 6'-B → 6'-C 通し) を「E2E smoke 公認版」に昇格 OR 独立 smoke 新設
-2. 違反 inject なしのリアル違反検出率測定 (post 11077 で LLM 出力に "審査が甘い" 等が混入するか)
-3. status 遷移チェーンの最終形確定:
-   - planned → analyzing → awaiting_policy_judgment / generating
-   - generating → awaiting_diff_judgment (現在 C-C 出力時点で遷移)
-   - C-D 後の遷移有無 (案: violations 0 件で 'ready_for_review'、1+ 件で 'awaiting_compliance_review' に遷移するか)
-4. 多 post smoke (cardloan 434 件のうち 3〜5 件サンプル) でコスト + 安定性測定
+1. 既存 smoke 全件 (smoke-* 16 件) 非破壊実行確認:
+   ```
+   smoke-analysis-runner.js          (C-B)
+   smoke-anthropic-adapter.js
+   smoke-article-similarity.js
+   smoke-case-c-bundle.js            (段階B B-5)
+   smoke-competitor-corpus.js
+   smoke-compliance-runner.js        (C-D)
+   smoke-delta-calibration.js        (段階B B-4)
+   smoke-diff-runner.js              (C-C)
+   smoke-e2e.js                      (C-E、本セッション)
+   smoke-embedding-poc.js            (段階A/B)
+   smoke-hcu-extract.js
+   smoke-hcu-insert.js
+   smoke-layer1.js
+   smoke-layer2.js
+   smoke-passage-store.js            (段階B B-3)
+   smoke-post-target-query.js
+   smoke-serpapi-adapter.js
+   smoke-test-queue-api.js
+   ```
+2. 既存 smoke の cost / time / failure を集計、Phase 2 完成 7/7 を最終宣言
+3. 段階C 申し送り文書化 (knowledge/05 V-A-3-9 + V-A-3-12 を統合した「段階C 着手リスト」)
+4. handoff を Phase 3 学習ループフェーズ用にフルリライト
 
-## C-E で判定すべき論点
+## C-F で判定すべき論点
 
-- C-D smoke を E2E 公認版に格上げする (a) vs 独立 E2E smoke を新設する (b) のどちらか
-- 多 post smoke のサンプリング戦略 (target_selection スコア上位 / ランダム / 既知の問題記事)
-- C-D 後の session.status 拡張要否 (現状 'awaiting_diff_judgment' で停止)
+- LLM 課金 smoke (smoke-e2e / smoke-analysis-runner / smoke-diff-runner / smoke-compliance-runner / smoke-hcu-extract) を全実行するか、Snapshot 既知 pass を信頼してスキップするか
+- C-F 完了後の Phase 3 開始タイミング (handoff フルリライトの優先度)
 
 # プロジェクト構造 (2026-05-21 末)
 
@@ -226,16 +243,17 @@ s-tools/
 
 1. CLAUDE.md と knowledge/05_rewrite_system_design.md V-A-2 + V-A-3 章を読み、現状を把握
 2. 直近のセッション記録を読む:
-   - sessions/2026-05-22_case_c_d_implementation.md (案C C-D 完了、最新)
+   - sessions/2026-05-22_case_c_e_implementation.md (案C C-E 完了、最新)
+   - sessions/2026-05-22_case_c_d_implementation.md (案C C-D 完了)
    - sessions/2026-05-22_case_c_c_implementation.md (案C C-C 完了)
    - sessions/2026-05-21_case_c_design.md (案C C-A 設計確定)
-3. C-E E2E smoke 着手:
-   - C-D smoke (analysis → diff → compliance 通し) を E2E 公認版に格上げ判定
-   - 多 post サンプリング戦略の判定 (3〜5 件)
-   - LLM 出力に違反表現がリアルに混入するかの検出率測定
-4. C-D 実装 (compliance-checker / compliance-runner) を流用
+3. C-F 既存 smoke 非破壊確認 + 段階C 申し送り着手:
+   - smoke-* 全 16 件の non-destructive 確認 (LLM 課金 smoke の実行スコープを判定)
+   - cost / time / failure 集計
+   - 段階C 申し送りリスト整備 (knowledge/05 V-A-3-9 + V-A-3-12 統合)
+   - Phase 2 7/7 完成宣言 + Phase 3 学習ループフェーズ移行準備
 
-それでは C-E から進めてください。
+それでは C-F から進めてください。
 ```
 
 ---
