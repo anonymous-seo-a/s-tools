@@ -342,6 +342,110 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
   );
 }
 
+function GenerationPanel({ showToast, onSessionCreated }) {
+  const [postId, setPostId] = useState('');
+  const [queryFanouts, setQueryFanouts] = useState([]);
+  const [queryFanoutId, setQueryFanoutId] = useState('');
+  const [enableCompliance, setEnableCompliance] = useState(true);
+  const [job, setJob] = useState(null);
+
+  useEffect(() => {
+    api.getQueryFanouts().then((r) => {
+      setQueryFanouts(r.items || []);
+      if (r.items && r.items.length > 0) setQueryFanoutId(String(r.items[0].id));
+    }).catch(() => {});
+    api.getGenerationJob().then(setJob).catch(() => {});
+  }, []);
+
+  // polling
+  useEffect(() => {
+    if (!job || job.status !== 'running') return;
+    const t = setInterval(async () => {
+      try {
+        const j = await api.getGenerationJob(job.job_id);
+        setJob(j);
+        if (j.status !== 'running') {
+          clearInterval(t);
+          if (j.status === 'completed') {
+            showToast(`session #${j.session_id} 生成完了 (diffs=${j.diff?.diffs_inserted || 0}${j.compliance ? ', violations=' + j.compliance.total_violations : ''})`);
+            onSessionCreated?.(j.session_id);
+          } else {
+            showToast(`生成失敗: ${j.error}`, 'error');
+          }
+        }
+      } catch (_) {}
+    }, 4000);
+    return () => clearInterval(t);
+  }, [job, showToast, onSessionCreated]);
+
+  const handleStart = async () => {
+    const pid = Number(postId);
+    const qfid = Number(queryFanoutId);
+    if (!Number.isInteger(pid) || pid <= 0) return showToast('post_id を入力してください', 'error');
+    if (!Number.isInteger(qfid) || qfid <= 0) return showToast('query_fanout を選択してください', 'error');
+    const ok = confirm(`post_id=${pid} query_fanout=${qfid} で生成します。\n推定: Opus + Sonnet${enableCompliance ? ' + Layer 2 compliance' : ''} = 約 $0.6 / 3 分。続行?`);
+    if (!ok) return;
+    try {
+      const j = await api.startGenerationJob({ post_id: pid, query_fanout_id: qfid, enableCompliance });
+      setJob(j);
+      showToast('生成開始');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const stepLabel = {
+    init: '初期化中', session_init: 'セッション作成', analyzing: '分析中 (Opus)',
+    generating: '差分生成中 (Sonnet)', compliance: 'compliance 検査中', done: '完了',
+  };
+
+  const running = job?.status === 'running';
+
+  return (
+    <div className="article-group" style={{ marginBottom: 16, background: '#fffde7' }}>
+      <div className="article-header" style={{ background: '#fff9c4', borderBottom: '1px solid #fbc02d' }}>
+        <div className="article-title">新規セッション生成 (一気通貫: analysis → diff → compliance)</div>
+      </div>
+      <div style={{ padding: 12, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+        <label style={{ fontSize: 12, color: '#666' }}>post_id</label>
+        <input
+          type="number"
+          value={postId}
+          onChange={(e) => setPostId(e.target.value)}
+          placeholder="例: 11077"
+          style={{ width: 120 }}
+          disabled={running}
+        />
+        <label style={{ fontSize: 12, color: '#666' }}>query_fanout</label>
+        <select value={queryFanoutId} onChange={(e) => setQueryFanoutId(e.target.value)} disabled={running} style={{ minWidth: 280 }}>
+          {queryFanouts.map((q) => (
+            <option key={q.id} value={q.id}>#{q.id} {q.sub_query} (seed: {q.seed_query})</option>
+          ))}
+        </select>
+        <label style={{ fontSize: 12, color: '#666' }}>
+          <input type="checkbox" checked={enableCompliance} onChange={(e) => setEnableCompliance(e.target.checked)} disabled={running} style={{ marginRight: 4, width: 'auto' }} />
+          compliance 実行
+        </label>
+        <button className="btn-apply btn-small" onClick={handleStart} disabled={running}>
+          {running ? '生成中...' : '生成'}
+        </button>
+      </div>
+      {job && (
+        <div style={{ padding: '10px 12px', background: 'white', borderTop: '1px solid #fbc02d', fontSize: 12 }}>
+          <span style={{ marginRight: 8, color: '#666' }}>job: {job.job_id}</span>
+          <span className={`status-badge ${job.status === 'completed' ? 'approved' : job.status === 'failed' ? 'rejected' : 'pending'}`}>
+            {job.status === 'running' ? (stepLabel[job.step] || job.step) : job.status}
+          </span>
+          {job.session_id && <span style={{ marginLeft: 8 }}>→ session #{job.session_id}</span>}
+          {job.diff && <span style={{ marginLeft: 8, color: '#666' }}>diffs={job.diff.diffs_inserted}</span>}
+          {job.compliance && <span style={{ marginLeft: 8, color: '#666' }}>violations={job.compliance.total_violations}</span>}
+          {job.error && <div style={{ color: '#c62828', marginTop: 4 }}>{job.error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RewriteJudgmentView({ showToast }) {
   const [status, setStatus] = useState('awaiting_diff_judgment');
   const [items, setItems] = useState([]);
@@ -366,6 +470,11 @@ export default function RewriteJudgmentView({ showToast }) {
 
   return (
     <div>
+      <GenerationPanel
+        showToast={showToast}
+        onSessionCreated={(sid) => { load(); setSelectedId(sid); }}
+      />
+
       <div className="filters">
         <label style={{ fontSize: 12, color: '#888' }}>ステータス</label>
         <select value={status} onChange={(e) => { setStatus(e.target.value); setSelectedId(null); }}>

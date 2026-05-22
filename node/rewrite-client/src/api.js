@@ -145,4 +145,15 @@ export const api = {
     }),
   getComplianceJob: (sessionId) =>
     request(`/api/rewrite/judgment/sessions/${sessionId}/compliance`),
+
+  // β-1A: 新規 session 生成 (一気通貫: analysis → diff → compliance)
+  startGenerationJob: (body) =>
+    request('/api/rewrite/judgment/sessions', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getGenerationJob: (jobId) =>
+    request(jobId ? `/api/rewrite/judgment/generation/${jobId}` : '/api/rewrite/judgment/generation'),
+  getQueryFanouts: () =>
+    request('/api/rewrite/judgment/query-fanouts'),
 };
