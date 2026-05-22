@@ -1,9 +1,9 @@
-# 次セッション用ハンドオフプロンプト（案C LLM 実行レイヤー着手）
+# 次セッション用ハンドオフプロンプト (Phase 3 学習ループ着手前準備)
 
 このファイルは、Claude Code 環境で新規セッションを開始するときに、Claudeに最初に渡すプロンプトとして使用する。
 
-最終更新: 2026年5月22日 (案C C-B〜C-E 完了、次セッションは C-F 既存 smoke 非破壊確認 + 段階C 申し送り)
-前提環境: Claude Code（s-tools/design/ 配下に全資産統合済み、s-tools/node/rewrite/ に Phase 2 6/7 完了 + embedding 二系統並列 本実装完了、shared/ (γ) lazy 構築 5 件済 = anthropic-adapter / intent_dimension.schema.json / serpapi-adapter / wp-structured (拡張済) / voyage-adapter）
+最終更新: 2026年5月22日 (Phase 2 MVP 7/7 完成、案C C-A〜C-F 全完了、次セッションは段階C 優先 A/B 課題着手)
+前提環境: Claude Code（s-tools/design/ 配下に全資産統合済み、s-tools/node/rewrite/ に Phase 2 7/7 完了 + 案C LLM 実行レイヤー (analysis-runner / diff-runner / compliance-runner / smoke-e2e) 完了）
 
 ---
 
@@ -17,145 +17,95 @@ Claude Code 起動時、ルート直下の `CLAUDE.md` が自動読込される�
 ## ハンドオフプロンプト本文（以下をコピペ）
 
 ```
-このセッションは、Daikiの「自走リライトシステム」の Phase 4 実装を継続するためのもの。
-Claude Code 環境で動作している前提。
+このセッションは、Daikiの「自走リライトシステム」の Phase 3 学習ループ稼働を見据えた
+段階C 着手前準備のためのもの。Claude Code 環境で動作している前提。
 
 # 現在地
 
-## Phase 4 MVP Phase 2 進捗 6/7 (2026-05-21 末時点)
+## Phase 4 MVP Phase 2 完成 (7/7、2026-05-22)
 
-Phase 2 主要実装タスク 7 件中 6/7 完了。
-残 1 = 案C LLM 実行レイヤー (工程6'-A/B、本丸、実リライト案生成)。
-段階B (embedding 系本実装化) が完了し、案C 着手準備が整った。
+Phase 2 主要実装タスク 7 件すべて完了。リライト 1 サイクル (対象選定 → 分析 → 差分生成 →
+コンプライアンス) が post 11077 / qf 11 で動作する状態を確立。
 
-完了済 (6/7):
+完了済 (7/7):
   1. master_post_target_query                (Part 4 案A 統合)
   2. master_competitor_corpus                (Part 4 + Part 5)
   3. master_fact_set                         (Part 5 LLM Layer 1〜3)
-  4. master_information_gain_score           (Part 5 包含テスト = fact-set 系)
-  5. Step A-2 master_query_fanout            (Part 3 Layer1/2)
-  6. master_hcu_checklist                    (2026-05-21 朝)
-  7. master_article_similarity α             (2026-05-21 午後)
+  4. master_information_gain_score           (Part 5 包含テスト)
+  5. master_query_fanout                     (Part 3 Layer1/2)
+  6. master_hcu_checklist                    (案B #5)
+  7. master_article_similarity α             (案B #9)
 
-残 1: 案C LLM 実行レイヤー (5〜8 日)
-  前提 = 段階B (embedding 二系統並列、本実装化) 完了済
+案C LLM 実行レイヤー全 6 ステップ完了:
+  C-A 設計確定 (V-A-3 章、knowledge/05)
+  C-B 工程6'-A Opus 4.7 分析     (analysis-runner.js)
+  C-C 工程6'-B Sonnet 4.6 差分生成 (diff-runner.js)
+  C-D 工程6'-C Compliance Checker (compliance-checker / runner.js)
+  C-E E2E smoke 2 pass 公認版      (smoke-e2e.js)
+  C-F 既存 smoke 非破壊確認 + 段階C 申し送り
 
-## 段階B 完了 (2026-05-21、B-1〜B-7 一気通し)
+段階B (embedding 二系統並列、本実装化) も完了 (B-1〜B-7、2026-05-21)。
 
-段階A PoC を「本番運用に耐える二系統並列構造」に書き直し:
-  B-1 設計確定 (5 論点 Claude 推奨採用、baef663)
-  B-2 テーブル本実装 (poc_run_id → session_id 置換 + content_hash、988a07a)
-  B-3 passage-store 永続化レイヤ (post_id × content_hash cache、07b4e4b)
-  B-4 δ 較正モジュール (DELTA_BUCKETS / judgeGapFlag、5cd891f)
-  B-5 案C 入力 bundle API (3 系統 A/B/C 別フィールド、ba6d709)
-  B-6 smoke 本実装ベース置換 (e4a0f6e)
-  B-7 全 archetype smoke pass (本コミット)
+## E2E 実測 (post 11077 / qf 11、2026-05-22)
 
-詳細: sessions/2026-05-21_stage_b_completion.md
+                        Pass A (inject=false)   Pass B (inject=true)
+  Opus  elapsed         43.2s                   48.1s
+  Sonnet elapsed        116.2s                  180.5s
+  diffs_inserted        5                       15
+  diffs_rejected        2                       0
+  violations (real)     0                       1 (inject)
+  cost (USD)            $0.4418                 $0.5458   total $0.9876
 
-## 案C で使う本実装 API (段階B 所産)
+リアル違反検出ゼロ = LLM 上流の YMYL 制約注入が機能、6'-C は安全網として動作。
 
-```js
-// 1. session 開始
-const sessionId = INSERT INTO master_rewrite_session ...
+# 段階C 着手前準備 (Phase 3 学習ループ稼働の前提)
 
-// 2. 入力 bundle 取得 (3 系統)
-const bundle = buildCaseCInputBundle({ session_id, post_id, query_fanout_id });
-//   bundle.required_additions  ← A 系統 (fact-set 必須追加)
-//   bundle.shallow_queries     ← B 系統 (embedding Q[i] 深度不足)
-//   bundle.shallow_facts       ← C 系統 (embedding fact 深度不足、divergent)
+knowledge/05 V-A-3-9 章を参照。優先度 A〜D の 4 カテゴリで整備:
 
-// 3. embedding は cache 透過
-const selfEmbed = await getOrComputeEmbeddings({ source: ..., plain_text, passages });
+## A. コスト圧縮 (最優先)
+- Sonnet output 揺れ抑制 + prompt 簡素化 ($0.5/pass → $0.2/pass 目標)
+- diffs_rejected 削減 (cheerio パース失敗パターン分析)
+- Opus 高リスク categories 揺れ抑制
 
-// 4. gap 判定は judgeGapFlag に統一
-const judge = judgeGapFlag({ self_max, comp_max, query_text });
-```
+## B. データ整備 (多 post smoke + 学習ループの前提)
+- master_post_target_query 全 cardloan 434 件拡張 (現状 2 件)
+- master_query_fanout seed_query 多様化 (現状 1 seed "即日融資 比較" のみ)
+- master_rules 21 件 verified 昇格運用 (現状 draft)
 
-# 案C LLM 実行レイヤー 進捗 (C-A 完了、Phase 2 残 1 タスク)
+## C. 検証経路の精緻化
+- C-D 照合の `.text()` 抽出ベース格上げ (HTML 属性混入リスク回避)
+- C-D 必須表現 / 正式表記 への対応拡張
+- content_before/after の独自 JSON 化 (cheerio 失敗多発時)
+- bundle 構造の重み付け
 
-## C-A 設計確定済 (2026-05-21 末、knowledge/05 V-A-3)
+## D. 上流統合
+- protected_regions の CSS class set 動的取得 (config 化)
+- WordPress raw context 取得権限整備
+- C-E 多 post smoke 実施 (B 完了後)
 
-  C-1 工程6'-A 重み付け → Opus 4.7 委譲
-  C-2 工程6'-B フォーマット → 独自 JSON ({target_section, change_type, ...})
-  C-3 ★ filter 責務 → smoke 後判定
-  C-4 Compliance → seed 21 件 + 正規表現
-  C-5 smoke スコープ → post 11077 / qf 11
+# 次セッション開始時の判定論点
 
-  追加確定:
-    analysis_output JSON 構造 (V-A-3-2)
-    rationale JSON 構造 (V-A-3-4)
-    情報伝搬フロー (V-A-3-5)
-    保護領域指示 = プロンプトのみ (V-A-3-6、上流変更なし)
-    bundle snapshot 保存 (V-A-3-7)
+1. 段階C 着手か Phase 3 直行か
+   - 段階C (B データ整備) を先行する: 多 post 実測 + 学習ループ用のデータ厚みが必要
+   - Phase 3 (UI 構築) を先行する: 1 セッションでも Daiki 判定 UI ができれば学習ループ開始可能
+   - 並行進行する: A コスト圧縮を Claude 側で漸進、Daiki は UI 着手
+2. 段階C 着手なら A (コスト) vs B (データ) のどちらから
+3. Phase 3 直行なら案L (Daiki 判定 UI) の MVP スコープ確定
 
-  パターンブロック ref 残留懸念解消:
-    10 記事実測で wp:block ref 0/10、entity 消失なし確認
-
-## 案C 作業分解 (C-E 完了後、残 0.5 日)
-
-| ステップ | 内容 | 工数 | 状態 |
-|---|---|---|---|
-| C-A | 設計確定 | 0.5 日 | ✓ |
-| C-B | 工程6'-A Opus 4.7 実装 | 1.5 日 | ✓ (2026-05-21) |
-| C-C | 工程6'-B Sonnet 4.6 実装 | 1.5 日 | ✓ (2026-05-22) |
-| C-D | 工程6'-C Compliance Checker | 1 日 | ✓ (2026-05-22) |
-| C-E | E2E smoke (2 pass + 集計レポート) | 1 日 | ✓ (2026-05-22、post 11077/qf 11 pass) |
-| **C-F** | **既存 smoke 非破壊確認 + 段階C 申し送り** | **0.5 日** | **次着手** |
-
-## C-E 完了状態 (2026-05-22)
-
-- 実装ファイル:
-  - `node/rewrite/scripts/smoke-e2e.js` (2 pass + 集計レポート + master_rules verified 一時昇格)
-- 実測 (post 11077 / qf 11):
-  - リアル違反検出 (Pass A inject=false): **0 件** (LLM 上流フィルタ機能)
-  - inject 検出 (Pass B): 1 件 + risk_flag セット成功
-  - cost: $0.99/2 pass (見積 $0.18 から大幅超過、段階C で prompt 簡素化候補)
-  - Sonnet output 揺れ大 (7883→13047)、maxTokens=16384 で安着
-- knowledge/05 V-A-3-12 に C-E 確定事項 + 実測 + 段階C 申し送り 3 項目を追記
-
-## C-F 着手項目
-
-1. 既存 smoke 全件 (smoke-* 16 件) 非破壊実行確認:
-   ```
-   smoke-analysis-runner.js          (C-B)
-   smoke-anthropic-adapter.js
-   smoke-article-similarity.js
-   smoke-case-c-bundle.js            (段階B B-5)
-   smoke-competitor-corpus.js
-   smoke-compliance-runner.js        (C-D)
-   smoke-delta-calibration.js        (段階B B-4)
-   smoke-diff-runner.js              (C-C)
-   smoke-e2e.js                      (C-E、本セッション)
-   smoke-embedding-poc.js            (段階A/B)
-   smoke-hcu-extract.js
-   smoke-hcu-insert.js
-   smoke-layer1.js
-   smoke-layer2.js
-   smoke-passage-store.js            (段階B B-3)
-   smoke-post-target-query.js
-   smoke-serpapi-adapter.js
-   smoke-test-queue-api.js
-   ```
-2. 既存 smoke の cost / time / failure を集計、Phase 2 完成 7/7 を最終宣言
-3. 段階C 申し送り文書化 (knowledge/05 V-A-3-9 + V-A-3-12 を統合した「段階C 着手リスト」)
-4. handoff を Phase 3 学習ループフェーズ用にフルリライト
-
-## C-F で判定すべき論点
-
-- LLM 課金 smoke (smoke-e2e / smoke-analysis-runner / smoke-diff-runner / smoke-compliance-runner / smoke-hcu-extract) を全実行するか、Snapshot 既知 pass を信頼してスキップするか
-- C-F 完了後の Phase 3 開始タイミング (handoff フルリライトの優先度)
-
-# プロジェクト構造 (2026-05-21 末)
+# プロジェクト構造 (2026-05-22 完成形)
 
 s-tools/
 ├── design/
 │   ├── CLAUDE.md
-│   ├── knowledge/05_rewrite_system_design.md  ← 必読、V-A-2 + 警戒バイアス [1]〜[23]
+│   ├── knowledge/05_rewrite_system_design.md  ← 必読、V-A-2 + V-A-3 (案C 確定 13 節)
 │   ├── sessions/                              ← 議論経緯
-│   │   ├── 2026-05-05_part1〜5
 │   │   ├── 2026-05-21_phase4_embedding_poc.md (段階A PoC + B-1)
-│   │   └── 2026-05-21_stage_b_completion.md   (段階B 完了、最新)
+│   │   ├── 2026-05-21_stage_b_completion.md   (段階B 完了)
+│   │   ├── 2026-05-21_case_c_design.md        (案C C-A 設計確定)
+│   │   ├── 2026-05-22_case_c_c_implementation.md (案C C-C)
+│   │   ├── 2026-05-22_case_c_d_implementation.md (案C C-D)
+│   │   ├── 2026-05-22_case_c_e_implementation.md (案C C-E)
+│   │   └── 2026-05-22_case_c_f_phase2_completion.md (案C C-F + Phase 2 完成宣言、最新)
 │   └── handoff/handoff_prompt_for_next_session.md  ← このファイル
 │
 └── node/
@@ -163,7 +113,7 @@ s-tools/
     │   ├── llm-adapters/anthropic-adapter.js
     │   ├── schemas/intent_dimension.schema.json
     │   ├── serpapi-adapter.js
-    │   ├── wp-structured.js                    (splitToPassages 拡張済)
+    │   ├── wp-structured.js
     │   └── voyage-adapter.js
     └── rewrite/
         ├── target-selection/                   (Phase 1)
@@ -171,51 +121,50 @@ s-tools/
         ├── post-target-query/                  (Part 4)
         ├── competitor-corpus/                  (Part 4)
         ├── fact-set/                           (Part 5)
-        ├── hcu-checklist/                      (2026-05-21 朝)
-        ├── article-similarity/                 (2026-05-21 午後)
-        ├── embedding-poc/                      ← 段階B 本実装化済
-        │   ├── migration.js                    (B-2)
-        │   ├── passage-store.js                (B-3)
-        │   ├── delta-calibration.js            (B-4)
-        │   ├── case-c-bundle.js                (B-5)
-        │   ├── coverage.js
-        │   └── report.js
+        ├── hcu-checklist/
+        ├── article-similarity/
+        ├── embedding-poc/                      (段階A/B 本実装)
+        │   ├── migration.js / passage-store.js / delta-calibration.js
+        │   ├── case-c-bundle.js / coverage.js / report.js
+        ├── llm-execution/                      ← ★ 案C 案件本丸
+        │   ├── case-c-prompt.js                (工程6'-A プロンプト)
+        │   ├── analysis-runner.js              (工程6'-A 実行、C-B)
+        │   ├── case-c-diff-prompt.js           (工程6'-B プロンプト)
+        │   ├── diff-runner.js                  (工程6'-B 実行、C-C)
+        │   ├── compliance-checker.js           (純粋関数、C-D)
+        │   └── compliance-runner.js            (DB ラッパ、C-D)
         ├── api/queue.js
         ├── batch/daily-target-selection.js
         ├── db.js
         ├── schema.sql
-        └── scripts/                            (CLI runners + smoke tests)
+        └── scripts/                            ← smoke 17 件 (うち 5 件本セッション再 verify)
+            ├── smoke-e2e.js                    ← E2E 公認版、C-E
+            ├── smoke-analysis-runner.js / smoke-diff-runner.js / smoke-compliance-runner.js
+            └── ... (他 13 件)
 
-# 新規テーブル (段階B 本実装化済)
+# 全 20 テーブル (rewrite.db、Phase 2 完成時点)
 
-  master_passage_embedding         post_id × content_hash UNIQUE、永続キャッシュ
-  master_query_coverage_baseline   session_id NOT NULL FK CASCADE
-  master_passage_gap               session_id NOT NULL FK CASCADE、judge_type 2 系統並走
+Phase 1: master_post_target_query / competitor_corpus / fact_set / information_gain_score
+         / query_fanout / rewrite_queue / target_selection_log
+Phase 2: master_rewrite_session / rewrite_diff / hcu_checklist / article_similarity
+         / passage_embedding / query_coverage_baseline / passage_gap
+        + (案B 由来) evidence / partner_status_history / ab_test 系
+        + (Phase E 統合) rules / annotations / completeness_checklist / ymyl_requirement
+        + (案D) regulation_event / audit_log / site_audit_score
 
 # 警戒バイアス [1]〜[23] (knowledge/05 XIV 章)
 
-## A. 設計判断バイアス
-[1] 既存資産への過剰適応  [2] 自分の初期推奨に固着  [3] 強推奨ラベルへの追従
-[4] 機能を盛りたくなる    [5] テーブル単位 vs システム全体最小性
-
-## B. 実装過剰バイアス
-[6] UI 過剰精緻化  [9] LLM プロンプト過剰精緻化  [10] JSON Schema 過剰汎用化
-[11] Adapter 過剰抽象化  [12] スケルトン隠れたコスト  [14] 細分化暴走
-[20] fact 抽出網羅性追求
-
-## C. プロンプト/LLM 整合バイアス
-[13] Google fan-out 正解探求  [15] intent_dimension 自動生成期待
-[16] YMYL 上流フィルタ怠惰  [21] LLM 出力構造化保証
-
-## D. 指示解釈・判断委任境界バイアス
-[7] Daiki 指示 literal vs intent  [8] schema 変更の判断委任境界
-
-## E. 外部 API/運用整合バイアス
-[17] SerpApi コスト浪費  [18] 取得対象範囲拡大  [19] 認証情報 Git 混入
-[22] 環境変数値構造仮定
-
-## F. 概念・意味論バイアス
-[23] fact 概念の意味論曖昧 (網羅性軸の二系統並列)
+A. 設計判断: [1] 既存資産過剰適応 [2] 初期推奨固着 [3] 強推奨追従 [4] 機能を盛りたくなる
+            [5] テーブル単位 vs システム全体最小性
+B. 実装過剰: [6] UI 過剰精緻化 [9] LLM プロンプト過剰精緻化 [10] JSON Schema 過剰汎用化
+            [11] Adapter 過剰抽象化 [12] スケルトン隠れたコスト [14] 細分化暴走
+            [20] fact 抽出網羅性追求
+C. プロンプト/LLM 整合: [13] Google fan-out 正解探求 [15] intent_dimension 自動生成期待
+            [16] YMYL 上流フィルタ怠惰 [21] LLM 出力構造化保証
+D. 指示解釈・委任境界: [7] Daiki 指示 literal vs intent [8] schema 変更の判断委任境界
+E. 外部 API/運用整合: [17] SerpApi コスト浪費 [18] 取得対象範囲拡大 [19] 認証情報 Git 混入
+            [22] 環境変数値構造仮定
+F. 概念・意味論: [23] fact 概念意味論曖昧
 
 # 進行スタイル
 
@@ -223,7 +172,7 @@ s-tools/
 - 真=美の最小性テストに反する設計は提示しない
 - 反証プロトコル: 主張に対する逆方向検証を必ず付記
 - 細かいコミットで履歴を残す
-- Claude 推奨で進める判断委任パターンを尊重 ("推奨でOK", "水晶でOK" など)
+- Claude 推奨で進める判断委任パターンを尊重 ("推奨でOK", "進めて" など)
 
 # 文体
 
@@ -235,33 +184,31 @@ s-tools/
 
 - Claude Code 環境
 - npm install 済み
-- rewrite.db 稼働中 (cardloan 434 件 + Step A-1/A-2 + 段階B 本実装テーブル)
+- rewrite.db 稼働中 (cardloan 434 件メタ + Step A-1/A-2 + 段階B 本実装テーブル + 案C 完成)
 - monitor.db cardloan 434 件メタ取得済
 - .env 全 9 件 (SERPAPI / GOOGLE / GA4 / GSC / WP_API × 3 / ANTHROPIC / VOYAGE)
 
 # 最初のタスク
 
-1. CLAUDE.md と knowledge/05_rewrite_system_design.md V-A-2 + V-A-3 章を読み、現状を把握
+1. CLAUDE.md と knowledge/05_rewrite_system_design.md V-A-3 章 (案C 確定 13 節) を読み、現状把握
 2. 直近のセッション記録を読む:
-   - sessions/2026-05-22_case_c_e_implementation.md (案C C-E 完了、最新)
-   - sessions/2026-05-22_case_c_d_implementation.md (案C C-D 完了)
-   - sessions/2026-05-22_case_c_c_implementation.md (案C C-C 完了)
-   - sessions/2026-05-21_case_c_design.md (案C C-A 設計確定)
-3. C-F 既存 smoke 非破壊確認 + 段階C 申し送り着手:
-   - smoke-* 全 16 件の non-destructive 確認 (LLM 課金 smoke の実行スコープを判定)
-   - cost / time / failure 集計
-   - 段階C 申し送りリスト整備 (knowledge/05 V-A-3-9 + V-A-3-12 統合)
-   - Phase 2 7/7 完成宣言 + Phase 3 学習ループフェーズ移行準備
+   - sessions/2026-05-22_case_c_f_phase2_completion.md (Phase 2 完成宣言、最新)
+   - sessions/2026-05-22_case_c_e_implementation.md (案C C-E E2E smoke)
+   - sessions/2026-05-22_case_c_d_implementation.md (案C C-D)
+3. Daiki に「次セッション開始時の判定論点」3 件を提示し、進路を確定:
+   - 段階C 着手か Phase 3 直行か並行か
+   - 段階C なら A コスト圧縮 vs B データ整備
+   - Phase 3 なら案L Daiki 判定 UI MVP スコープ
+4. 進路確定後、最小 1 ステップ単位で分解して着手
 
-それでは C-F から進めてください。
+それでは判定論点提示から進めてください。
 ```
 
 ---
 
 ## 補足: ハンドオフプロンプトの更新タイミング
 
-- 案C smoke 動作後 (Phase 2 完成 7/7) で書き直し
-- Phase 3 着手時に「学習ループ稼働フェーズ用」に書き直す
+- Phase 3 着手時に「学習ループ稼働フェーズ用」に再リライト (本ファイル更新は本セッションで実施済)
 - 各セッション終了時に Claude が新しいハンドオフを生成
 
 ---
@@ -281,6 +228,6 @@ s-tools/
 
 ```
 Phase 1: 対象選定の自動化         完了 (2026-05-05 Part 1)
-Phase 2: 自走システム本格稼働     進行中 (6/7、2026-05-21 末、残 1 = 案C)
-Phase 3: 学習ループ稼働           未着手
+Phase 2: 自走システム本格稼働     完了 (7/7、2026-05-22)
+Phase 3: 学習ループ稼働           未着手 (段階C 準備完了後に着手)
 ```

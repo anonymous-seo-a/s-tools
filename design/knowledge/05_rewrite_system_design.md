@@ -1258,7 +1258,9 @@ UPDATE master_rewrite_session SET notes=? WHERE id=?
 | C-C | 工程6'-B 差分生成プロンプト + Sonnet 4.6 呼出 + master_rewrite_diff 投入 | 1.5 日 ✓ 完了 (2026-05-22) |
 | C-D | 工程6'-C Compliance Checker 実装 (master_rules 単純 includes) | 1 日 ✓ 完了 (2026-05-22) |
 | C-E | E2E smoke (post 11077 / qf 11、6'-A → 6'-B → 6'-C 通し) | 1 日 ✓ 完了 (2026-05-22) |
-| C-F | 既存 smoke 非破壊確認 + 段階C 申し送り | 0.5 日 |
+| C-F | 既存 smoke 非破壊確認 + 段階C 申し送り | 0.5 日 ✓ 完了 (2026-05-22) |
+
+**案C 6 ステップ完了 = Phase 2 MVP 7/7 完成 (2026-05-22)**
 
 合計 5 日 (C-A 含めて段階B 後の案C 全体)。
 
@@ -1358,18 +1360,86 @@ cost (USD)            $0.4418                 $0.5458
   単一 post での E2E は overfitting リスクあり。LLM 安定性 + cost 安定性は多 post 実測 (段階C) で再評価。
   C-E は「通し動作と検出経路の正しさ」のみ保証する。
 
-### V-A-3-9. 段階C で再評価する論点
+### V-A-3-9. 段階C で再評価する論点 (C-F で統合、優先度順)
 
-- bundle 構造の重み付け (案C プロンプト改善時)
-- content_before/after の独自 JSON 化 (cheerio パース失敗が多発する場合)
-- protected_regions の CSS class set 動的取得 (config 化)
-- WordPress raw context 取得権限の整備 (将来、Gutenberg block JSON 直接処理)
+#### A. コスト圧縮 (最優先、Phase 3 学習ループ稼働の前提)
+- Sonnet output 揺れ抑制 + prompt 簡素化 ($0.5/pass → $0.2/pass 目標)
+- diffs_rejected 削減 (cheerio パース失敗の典型パターン分析 + プロンプト改善)
+- Opus 高リスク categories 揺れの抑制 (rate_update 過剰検出の精緻化)
+
+#### B. データ整備 (多 post smoke + 学習ループ稼働の前提)
+- master_post_target_query の全 cardloan 434 件への拡張 (現状 2 件のみ)
+- master_query_fanout の seed_query 多様化 (現状 1 seed "即日融資 比較")
+- master_rules 21 件の verified 昇格運用 (現状 draft、smoke 内で一時昇格)
+
+#### C. 検証経路の精緻化
 - C-D 照合の `.text()` 抽出ベース格上げ (HTML 属性混入リスク回避)
 - C-D 必須表現 / 正式表記 への対応拡張 (LLM 委譲 or キーワード文脈判定)
-- master_rules 21 件の verified 昇格運用 (現状 draft、smoke 内で一時昇格)
-- C-E 多 post smoke (target_query / qf データ整備が前提)
-- Sonnet output 揺れ抑制 + コスト圧縮 (prompt 簡素化、$0.5/pass → $0.2/pass 目標)
-- diffs_rejected 削減 (cheerio パース失敗の典型パターン分析 + プロンプト改善)
+- content_before/after の独自 JSON 化 (cheerio パース失敗が多発する場合)
+- bundle 構造の重み付け (案C プロンプト改善時)
+
+#### D. 上流統合
+- protected_regions の CSS class set 動的取得 (config 化)
+- WordPress raw context 取得権限の整備 (将来、Gutenberg block JSON 直接処理)
+- C-E 多 post smoke 実施 (B 完了後)
+
+### V-A-3-13. C-F 完了状態 + Phase 2 完成宣言 (2026-05-22)
+
+**Phase 2 MVP 7/7 完成**。案C 6 ステップ (C-A〜C-F) 全完了、リライト 1 サイクル
+(対象選定 → 分析 → 差分生成 → コンプライアンス) が動作する状態を確立。
+
+#### C-F 既存 smoke 非破壊確認結果
+
+| 分類 | smoke | 検証日 | 検証手段 |
+|---|---|---|---|
+| Free (DB/純粋) | smoke-delta-calibration | 2026-05-22 本セッション | 全 assertions pass、DELTA_BUCKETS 不変性 |
+| Free (DB/純粋) | smoke-test-queue-api | 2026-05-22 本セッション | 15/15 endpoint pass |
+| Free (DB/純粋) | smoke-case-c-bundle | 2026-05-22 本セッション | 15 assertions pass、CASCADE 確認 |
+| Free (WP API) | smoke-article-similarity | 2026-05-22 本セッション | post 7170+11077 bigram cosine=0.812 |
+| Cheap LLM | smoke-anthropic-adapter | 2026-05-22 本セッション | Sonnet 1+1=2、~$0.001 |
+| LLM 課金 | smoke-analysis-runner | 524aa0c (2026-05-21) | C-B 実装時 |
+| LLM 課金 | smoke-diff-runner | d89e38a (2026-05-22) | C-C 実装時 |
+| LLM 課金 | smoke-compliance-runner | ba076a7 (2026-05-22) | C-D 実装時 |
+| LLM 課金 | smoke-e2e | d280ce3 (2026-05-22) | C-E 実装時、2 pass + 7 assertions |
+| LLM 課金 | smoke-hcu-extract | 8386cb9 (2026-05-05) | HCU LLM 評価実装時 |
+| LLM 課金 | smoke-hcu-insert | c9eabb4 (2026-05-07) | 案B #5 master_hcu_checklist 投入時 |
+| LLM 課金 | smoke-layer1 | 0eb83b5 (2026-05-05) | Step A-2 Layer1 実装時 |
+| LLM 課金 | smoke-layer2 | d252743 (2026-05-05) | Step A-2 完了時 |
+| Voyage 課金 | smoke-passage-store | f0f4da8 (2026-05-21) | 段階B B-7 全 archetype pass |
+| Voyage 課金 | smoke-embedding-poc | e4a0f6e (2026-05-21) | 段階B B-6 smoke 置換時 |
+| SerpApi 課金 | smoke-serpapi-adapter | 645048c (2026-05-05) | Step A-1 着手1 |
+| SerpApi 課金 | smoke-competitor-corpus | 645048c (2026-05-05) | Step A-1 着手1 |
+
+#### 課金 smoke 非実行の妥当性検証 (retroactive breakage チェック)
+
+- schema.sql 最終変更: 1d6cb62 (2026-05-05) → 案C 期間中スキーマ不変
+- master_rewrite_session の triggered_by 値拡張のみ (TEXT 列、後方互換)
+- shared/ 変更: ff13e1d (2026-05-21 段階A) 以降、本セッションで変更なし
+- → 課金 smoke の retroactive breakage リスクなし、commit SHA verified で完了扱い
+
+#### Phase 2 累計コミット (2026-05-21 段階B 締め以降 + 案C 全工程)
+
+```
+f0f4da8 (2026-05-21) 段階B B-7 締め
+de40603 (2026-05-21) 案C C-A 設計確定
+524aa0c (2026-05-21) 案C C-B 工程6'-A Opus 4.7
+d89e38a (2026-05-22) 案C C-C 工程6'-B Sonnet 4.6
+ba076a7 (2026-05-22) 案C C-D 工程6'-C Compliance
+d280ce3 (2026-05-22) 案C C-E E2E smoke
+(本コミット, 2026-05-22) 案C C-F 完了 + Phase 2 完成宣言
+```
+
+#### Phase 3 移行準備 (handoff フルリライト対象)
+
+Phase 3 = 学習ループ稼働フェーズ。主要 3 ループ:
+  1. 記録ループ: master_rewrite_diff.daiki_judgment / daiki_reject_reason 蓄積
+  2. 抽出ループ: 月次バッチで change_category 単位の効果集計 (案D 2.F)
+  3. 反映ループ: SearchPilot 方式 A/B テスト (master_ab_test) で variant 効果測定
+
+着手前提:
+  - データ整備 (V-A-3-9 B 章) 完了
+  - コスト圧縮 (V-A-3-9 A 章) で運用持続可能性確保
+  - UI 整備 (Daiki 判定インターフェース、案L)
 
 ---
 
