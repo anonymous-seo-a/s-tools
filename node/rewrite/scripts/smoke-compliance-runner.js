@@ -126,9 +126,9 @@ function assert(cond, msg) {
     conn.prepare(`UPDATE master_rewrite_diff SET content_after=? WHERE id=?`).run(tainted, firstDiff.id);
     console.log(`  injected → diff_id=${firstDiff.id} (risk_flag_before='${firstDiff.risk_flag}')`);
 
-    // === 7. runComplianceCheck ===
-    console.log('\n=== 7. runComplianceCheck ===');
-    const complianceRes = await runComplianceCheck({ session_id: sessionId });
+    // === 7. runComplianceCheck (Layer 1 のみ、Layer 2 は smoke-compliance-layer2.js で個別検証) ===
+    console.log('\n=== 7. runComplianceCheck (Layer 1 only) ===');
+    const complianceRes = await runComplianceCheck({ session_id: sessionId, enableLayer2: false });
     console.log(`  rules_loaded=${complianceRes.rules_loaded}`);
     console.log(`  diffs_scanned=${complianceRes.diffs_scanned}`);
     console.log(`  diffs_with_violations=${complianceRes.diffs_with_violations}`);

@@ -56,6 +56,7 @@ function checkDiffCompliance(diff, rules) {
           ng_text: r.ng_text,
           legal_basis: r.legal_basis || null,
           position: pos,
+          detection_layer: 1, // 段階C C-B-4: Layer 1 (indexOf) マーカー
         });
       }
     }
