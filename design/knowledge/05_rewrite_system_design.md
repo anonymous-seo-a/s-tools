@@ -1371,6 +1371,11 @@ cost (USD)            $0.4418                 $0.5458
 - master_post_target_query の全 cardloan 434 件への拡張 (現状 2 件のみ)
 - master_query_fanout の seed_query 多様化 (現状 1 seed "即日融資 比較")
 - master_rules 21 件の verified 昇格運用 (現状 draft、smoke 内で一時昇格)
+- **master_rules への具体規制パターン追加 (2026-05-22 Daiki 指摘、E2E 出力検査由来):**
+  - 上限金利・下限金利をピックしての比較 NG (景表法 / 業界自主規制、検出難易度: 高)
+  - アコム固有: 実際の返済額シミュレーション NG (パートナー個別契約、検出難易度: 中)
+  - 新 rule_type 候補: `比較構造禁止` / `パートナー個別`
+  - Compliance Checker Layer 2 (LLM パターン検出) 追加が前提条件 (現状 Layer 1 = 単純 indexOf のみ)
 
 #### C. 検証経路の精緻化
 - C-D 照合の `.text()` 抽出ベース格上げ (HTML 属性混入リスク回避)
