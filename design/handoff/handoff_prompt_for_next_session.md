@@ -2,7 +2,7 @@
 
 このファイルは、Claude Code 環境で新規セッションを開始するときに、Claudeに最初に渡すプロンプトとして使用する。
 
-最終更新: 2026年5月22日 (Phase 2 MVP 7/7 完成、案C C-A〜C-F 全完了、次セッションは段階C 優先 A/B 課題着手)
+最終更新: 2026年5月22日 (Phase 2 完成 + 段階C C-B 完了 / Layer 2 規制レイヤー確立、次セッションは段階C A コスト圧縮 or B 残データ整備)
 前提環境: Claude Code（s-tools/design/ 配下に全資産統合済み、s-tools/node/rewrite/ に Phase 2 7/7 完了 + 案C LLM 実行レイヤー (analysis-runner / diff-runner / compliance-runner / smoke-e2e) 完了）
 
 ---
@@ -63,14 +63,16 @@ Phase 2 主要実装タスク 7 件すべて完了。リライト 1 サイクル
 knowledge/05 V-A-3-9 章を参照。優先度 A〜D の 4 カテゴリで整備:
 
 ## A. コスト圧縮 (最優先)
-- Sonnet output 揺れ抑制 + prompt 簡素化 ($0.5/pass → $0.2/pass 目標)
+- Sonnet diff output 揺れ抑制 + prompt 簡素化 ($0.5/pass → $0.2/pass 目標)
+- Layer 2 prompt size 圧縮 ($0.10/session → $0.05/session 目標)
 - diffs_rejected 削減 (cheerio パース失敗パターン分析)
 - Opus 高リスク categories 揺れ抑制
 
-## B. データ整備 (多 post smoke + 学習ループの前提)
+## B. データ整備 (多 post smoke + 学習ループの前提) — Layer 2 規制系完了
+- ~~master_rules verified 昇格~~ → 完了 (2026-05-22 C-B-2)
+- ~~Daiki 指摘 2 件 + Compliance Layer 2~~ → 完了 (2026-05-22 C-B-1〜5)
 - master_post_target_query 全 cardloan 434 件拡張 (現状 2 件)
 - master_query_fanout seed_query 多様化 (現状 1 seed "即日融資 比較" のみ)
-- master_rules 21 件 verified 昇格運用 (現状 draft)
 
 ## C. 検証経路の精緻化
 - C-D 照合の `.text()` 抽出ベース格上げ (HTML 属性混入リスク回避)
@@ -192,13 +194,12 @@ F. 概念・意味論: [23] fact 概念意味論曖昧
 
 1. CLAUDE.md と knowledge/05_rewrite_system_design.md V-A-3 章 (案C 確定 13 節) を読み、現状把握
 2. 直近のセッション記録を読む:
-   - sessions/2026-05-22_case_c_f_phase2_completion.md (Phase 2 完成宣言、最新)
-   - sessions/2026-05-22_case_c_e_implementation.md (案C C-E E2E smoke)
-   - sessions/2026-05-22_case_c_d_implementation.md (案C C-D)
-3. Daiki に「次セッション開始時の判定論点」3 件を提示し、進路を確定:
-   - 段階C 着手か Phase 3 直行か並行か
-   - 段階C なら A コスト圧縮 vs B データ整備
-   - Phase 3 なら案L Daiki 判定 UI MVP スコープ
+   - sessions/2026-05-22_stage_c_b_layer2_implementation.md (段階C C-B 完了、最新)
+   - sessions/2026-05-22_case_c_f_phase2_completion.md (Phase 2 完成宣言)
+   - sessions/2026-05-22_case_c_e_implementation.md (案C C-E E2E)
+3. Daiki に進路判定を提示:
+   - 段階C A (コスト圧縮) vs B 残 (target_query / qf データ拡張) vs Phase 3 (UI MVP)
+   - C-B 完了で Layer 2 規制レイヤーは確立済 → 残るのは多 post スケーリングとコスト
 4. 進路確定後、最小 1 ステップ単位で分解して着手
 
 それでは判定論点提示から進めてください。

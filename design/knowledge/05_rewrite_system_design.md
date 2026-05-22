@@ -1370,12 +1370,12 @@ cost (USD)            $0.4418                 $0.5458
 #### B. データ整備 (多 post smoke + 学習ループ稼働の前提)
 - master_post_target_query の全 cardloan 434 件への拡張 (現状 2 件のみ)
 - master_query_fanout の seed_query 多様化 (現状 1 seed "即日融資 比較")
-- master_rules 21 件の verified 昇格運用 (現状 draft、smoke 内で一時昇格)
-- **master_rules への具体規制パターン追加 (2026-05-22 Daiki 指摘、E2E 出力検査由来):**
-  - 上限金利・下限金利をピックしての比較 NG (景表法 / 業界自主規制、検出難易度: 高)
-  - アコム固有: 実際の返済額シミュレーション NG (パートナー個別契約、検出難易度: 中)
-  - 新 rule_type 候補: `比較構造禁止` / `パートナー個別`
-  - Compliance Checker Layer 2 (LLM パターン検出) 追加が前提条件 (現状 Layer 1 = 単純 indexOf のみ)
+- ~~master_rules 21 件の verified 昇格運用~~ → **完了 (2026-05-22 C-B-2、verified_by='daiki')**
+- ~~Daiki 指摘 2 件 master_rules 追加 + Compliance Layer 2~~ → **完了 (2026-05-22 C-B-1〜5)**
+  - 規則 22: 比較構造禁止 / 上限・下限ピック比較 (id=22、Layer 2、target_partner=null)
+  - 規則 23: アコム × 具体返済額シミュレーション (id=23、Layer 2、target_partner=acom)
+  - schema v2: target_partner / detection_layer / pattern_hint 列追加
+  - Compliance Checker Layer 2 (個別判定、Sonnet 4.6、~$0.10/session)
 
 #### C. 検証経路の精緻化
 - C-D 照合の `.text()` 抽出ベース格上げ (HTML 属性混入リスク回避)
@@ -1387,6 +1387,84 @@ cost (USD)            $0.4418                 $0.5458
 - protected_regions の CSS class set 動的取得 (config 化)
 - WordPress raw context 取得権限の整備 (将来、Gutenberg block JSON 直接処理)
 - C-E 多 post smoke 実施 (B 完了後)
+
+### V-A-3-14. 段階C C-B 完了状態 (2026-05-22、Layer 2 規制レイヤー確立)
+
+Phase 2 完了直後に Daiki が E2E 出力検査で 2 件の規制違反 (上限・下限ピック比較 / アコム返済額シミュレーション) を指摘。段階C B (データ整備) 内の最優先タスクとして C-B-1〜5 を一気通しで実装。
+
+#### C-B-1: master_rules schema v2 (728e854)
+
+```
+ALTER パスは取らず、テーブル再生成方式 (idempotent):
+  CHECK (rule_type IN (...)) 撤廃 → app-level validation
+  追加列: target_partner TEXT NULL
+  追加列: detection_layer INTEGER NOT NULL DEFAULT 1
+  追加列: pattern_hint TEXT NULL
+  CHECK (detection_layer IN (1, 2))
+  INDEX: idx_rules_layer / idx_rules_partner 追加
+既存 21 行はそのまま移送 (detection_layer=1 デフォルト)。
+```
+
+#### C-B-2: Layer 2 規制 2 件投入 + Layer 1 verified 昇格 (6bb2288)
+
+```
+id=22 比較構造禁止     target_partner=null   pattern_hint="複数社の金利を比較する際に、上限金利のみ・または下限金利のみを抽出して並べる表現..."
+id=23 パートナー個別  target_partner=acom   pattern_hint="アコムに関して、具体的な借入金額と返済期間から月々の返済額を計算して提示する表現..."
+
+既存 21 件 (Layer 1, draft) → status='verified', verified_by='daiki'
+
+最終 state: layer=1 verified 21 / layer=2 verified 2 = 23 件
+```
+
+#### C-B-3〜5: Compliance Layer 2 実装 + smoke (d3fca60)
+
+```
+個別判定 (1 diff × 1 rule = 1 Sonnet 4.6 call、Daiki 承認)。
+pre-filter: target_partner キーワード不在 diff は LLM 呼出スキップ。
+
+新規ファイル:
+  node/rewrite/compliance/compliance-checker-layer2.js
+    checkDiffRuleLayer2 純粋関数 (prefilter + buildPrompt + sonnet + parse)
+    PARTNER_KEYWORDS 辞書 (acom / promise / aiful / mobit)
+  node/rewrite/scripts/smoke-compliance-layer2.js
+
+修正ファイル:
+  compliance-checker.js: Layer 1 violations に detection_layer:1 マーカー追加
+  compliance-runner.js: loadLayer1/Layer2 分離、Phase 1+2+3 統合フロー
+                        enableLayer2 引数 (default true)、後方互換 alias 維持
+  smoke-compliance-runner.js: enableLayer2=false 明示 (Layer 1 only、コスト保全)
+```
+
+#### C-B smoke 実測 (post 11077 / qf 11)
+
+```
+Layer 2 統合 smoke:
+  rules_loaded     : 23 (L1=21 + L2=2)
+  diffs_scanned    : 15
+  layer2_llm_calls : 21 (skipped=9 by pre-filter)
+  layer2_usage     : input=24937 / output=1755
+  layer2 cost      : ~\$0.10/session (Sonnet \$3/15 per MTok)
+  全 10 assertions ✓
+
+E2E 総コスト見積: $0.50 (Opus+Sonnet diff) + $0.10 (Layer 2) = \$0.60/session
+```
+
+#### 重要発見: Layer 2 がリアル違反を検出 (inject なし)
+
+post 11077 で diff[3] (inject なし、LLM 生成物) に Layer 2 rule 22 がリアルヒット:
+
+```
+evidence: "消費者金融：年18.0%程度、銀行：年14.5%程度...大手消費者金融の下限金利は
+          年2.4%〜3.0%程度..."
+reason  : 上限金利同士の比較後に下限金利を追加提示しており、各社の金利範囲全体を
+          統一的に並べず片側抽出の混在構造に該当する
+```
+
+→ Daiki が直接指摘した「上限・下限ピック比較 NG」が LLM 生成物にリアル混入していた事実を Layer 2 が捕獲。Layer 1 indexOf では絶対検出不可能なパターン。
+
+#### Daiki の選好パターン (再確認、memory に保存済)
+
+「内容としてはとても良さそう / レギュレーション周りは、できてから調整すれば良いかな?」(2026-05-22) 承認 → リライト核 6'-A/B には手を入れず、6'-C + master_rules で完全対応 → 案D 設計原則 8 (複雑性の局所化) に整合。
 
 ### V-A-3-13. C-F 完了状態 + Phase 2 完成宣言 (2026-05-22)
 
