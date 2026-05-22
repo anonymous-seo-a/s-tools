@@ -64,9 +64,9 @@ function checkDiffCompliance(diff, rules) {
 
   const compliance = (rationale.compliance && typeof rationale.compliance === 'object')
     ? rationale.compliance
-    : { violations: [], ymyl_requirements_met: [], annotations_added: [] };
-  // violations は累積 (既存 + 新規)、rule_id で uniq
-  const prev = Array.isArray(compliance.violations) ? compliance.violations : [];
+    : { sonnet_annotations: [], detected_violations: [], ymyl_requirements_met: [], annotations_added: [] };
+  // detected_violations は累積 (既存 + 新規)、rule_id で uniq
+  const prev = Array.isArray(compliance.detected_violations) ? compliance.detected_violations : [];
   const seen = new Set(prev.map((v) => v.rule_id));
   for (const v of violations) {
     if (!seen.has(v.rule_id)) {
@@ -74,7 +74,8 @@ function checkDiffCompliance(diff, rules) {
       seen.add(v.rule_id);
     }
   }
-  compliance.violations = prev;
+  compliance.detected_violations = prev;
+  if (!Array.isArray(compliance.sonnet_annotations)) compliance.sonnet_annotations = [];
   if (!Array.isArray(compliance.ymyl_requirements_met)) compliance.ymyl_requirements_met = [];
   if (!Array.isArray(compliance.annotations_added)) compliance.annotations_added = [];
   const updatedRationale = { ...rationale, compliance };

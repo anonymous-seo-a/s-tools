@@ -148,8 +148,8 @@ function assert(cond, msg) {
       `SELECT id, rationale, risk_flag FROM master_rewrite_diff WHERE id=?`
     ).get(firstDiff.id);
     const rationale = JSON.parse(updated.rationale);
-    const violations = rationale?.compliance?.violations || [];
-    assert(violations.length >= 1, `diff[0].rationale.compliance.violations.length >= 1 (got ${violations.length})`);
+    const violations = rationale?.compliance?.detected_violations || [];
+    assert(violations.length >= 1, `diff[0].rationale.compliance.detected_violations.length >= 1 (got ${violations.length})`);
     const ngHit = violations.find((v) => v.ng_text === '審査が甘い');
     assert(!!ngHit, `violations に "審査が甘い" が含まれる`);
     if (ngHit) {

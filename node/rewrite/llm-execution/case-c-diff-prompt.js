@@ -84,7 +84,7 @@ const SYSTEM_PROMPT = `あなたは SEO リライト差分生成者 (YMYL 領域
           "shallow_facts": []
         },
         "compliance": {
-          "violations": [],
+          "sonnet_annotations": [],
           "ymyl_requirements_met": [],
           "annotations_added": []
         },
@@ -125,6 +125,11 @@ risk_flag     : null または ${RISK_FLAGS.join(' / ')}
 - regulation_citation: 法令引用 (貸金業法 / 出資法 / 個人情報保護法 等) の追加・修正
 - rate_update        : 金利・限度額・料率・無利息期間の数値更新
 該当しなければ "risk_flag": null
+risk_flag に change_category 値 (compliance_update / paragraph_rewrite / evidence_insertion 等) を流入させない。risk_flag は上記 4 値か null のみ。
+
+# rationale.compliance フィールド使い分け
+- sonnet_annotations[] : Sonnet が記述する自由文 (例: "master_rules: 正式表記ルール...")
+- detected_violations[] は post-process (工程6'-C) 専用、Sonnet は書かない
 
 # 保護領域 (V-A-3-6)
 content_before として保護領域 (PROTECTED_REGIONS で示される CSS class 配下) のテキストを参照する diff を出力してはならない。

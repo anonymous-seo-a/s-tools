@@ -10,7 +10,7 @@
  *   - Layer 2 (async, LLM):    detection_layer=2、1 diff × 1 rule = 1 Sonnet 4.6 call
  *                               target_partner 設定時は pre-filter で LLM 呼出スキップ
  *   - 違反検出時:
- *       rationale.compliance.violations 累積 (detection_layer={1,2} で区別可能)
+ *       rationale.compliance.detected_violations 累積 (detection_layer={1,2} で区別可能、sonnet_annotations と分離)
  *       risk_flag null → 'regulation_citation' セット (既存は保持)
  *
  * 警戒バイアス対チェック:
@@ -144,8 +144,8 @@ async function runComplianceCheck({ session_id, enableLayer2 = true }) {
       if (l2Hits.length > 0) {
         const compliance = (mergedRationale.compliance && typeof mergedRationale.compliance === 'object')
           ? mergedRationale.compliance
-          : { violations: [], ymyl_requirements_met: [], annotations_added: [] };
-        const prev = Array.isArray(compliance.violations) ? compliance.violations : [];
+          : { sonnet_annotations: [], detected_violations: [], ymyl_requirements_met: [], annotations_added: [] };
+        const prev = Array.isArray(compliance.detected_violations) ? compliance.detected_violations : [];
         const seen = new Set(prev.map((v) => v.rule_id));
         for (const { rule, result } of l2Hits) {
           if (seen.has(rule.id)) continue;
@@ -162,7 +162,8 @@ async function runComplianceCheck({ session_id, enableLayer2 = true }) {
           seen.add(rule.id);
           allViolations.push(v);
         }
-        compliance.violations = prev;
+        compliance.detected_violations = prev;
+        if (!Array.isArray(compliance.sonnet_annotations)) compliance.sonnet_annotations = [];
         if (!Array.isArray(compliance.ymyl_requirements_met)) compliance.ymyl_requirements_met = [];
         if (!Array.isArray(compliance.annotations_added)) compliance.annotations_added = [];
         mergedRationale = { ...mergedRationale, compliance };
