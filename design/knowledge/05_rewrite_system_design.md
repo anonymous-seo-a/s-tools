@@ -1256,7 +1256,7 @@ UPDATE master_rewrite_session SET notes=? WHERE id=?
 | C-A | 設計確定 (本節) | 0.5 日 ✓ 完了 |
 | C-B | 工程6'-A 分析プロンプト + Opus 4.7 呼出 + analysis_output 保存 | 1.5 日 ✓ 完了 (2026-05-21) |
 | C-C | 工程6'-B 差分生成プロンプト + Sonnet 4.6 呼出 + master_rewrite_diff 投入 | 1.5 日 ✓ 完了 (2026-05-22) |
-| C-D | 工程6'-C Compliance Checker 実装 (master_rules 正規表現) | 1 日 |
+| C-D | 工程6'-C Compliance Checker 実装 (master_rules 単純 includes) | 1 日 ✓ 完了 (2026-05-22) |
 | C-E | E2E smoke (post 11077 / qf 11、6'-A → 6'-B → 6'-C 通し) | 1 日 |
 | C-F | 既存 smoke 非破壊確認 + 段階C 申し送り | 0.5 日 |
 
@@ -1284,12 +1284,43 @@ C-C smoke 結果 (post 11077 / qf 11、rate_update 高リスクパス):
   - diffs_inserted=7 / rejected=0 (全 enum + cheerio パス)
   - 推定コスト ~$0.18 / 1 セッション
 
+### V-A-3-11. C-D 実装上の確定事項 (2026-05-22)
+
+V-A-3-3 / C-4 仕様の C-D 具体化:
+
+| 項目 | C-D 確定 |
+|---|---|
+| 照合方式 | 単純 `String.indexOf` (case-sensitive、HTML 生文字列) |
+| 対象 rule_type | `禁止表現` のみ (`必須表現` / `正式表記` は段階C) |
+| 対象 condition | `condition='常に'` のみ (商材言及条件は LLM 委譲) |
+| 対象 status | `category='cardloan' AND status='verified'` |
+| 走査列 | `content_after` のみ (`content_before` は元記事 = 改変対象外) |
+| violations 累積 | `rule_id` で uniq、既存 + 新規をマージ |
+| risk_flag 上書き | 既存 null 時のみ 'regulation_citation' セット、それ以外保持 |
+| 違反検出時の出力 | rationale.compliance.violations[] + 必要なら risk_flag 更新 |
+| session.status 遷移 | C-D 単独では遷移なし (C-E E2E で判定) |
+| 純粋関数分離 | `compliance-checker.js` (DB 非依存、テスト容易) + `compliance-runner.js` (DB アクセス) |
+
+C-D smoke 結果 (post 11077 / qf 11、master_rules 21 件 verified 昇格):
+  - rules_loaded=21 / diffs_scanned=10 (analysis → diff → compliance 通し)
+  - 違反 mock inject: diff[0].content_after に "審査が甘い" 追記
+  - total_violations=1 (rule_id=1 ng="審査が甘い" pos=1161)
+  - risk_flag 既存 'rate_update' 保持 (regulation_citation で上書きせず、violations[] で表現)
+  - master_rules revert 完了 (21 件 → draft、smoke 後の state 不変)
+
+反証:
+  HTML 属性内 ng_text 誤検出可能性 → 21 件 ng_text はすべて日本語固有表現で HTML 属性混入リスクなし、許容。
+  段階C で `.text()` 抽出ベース照合に格上げ可能 (V-A-3-12 候補)。
+
 ### V-A-3-9. 段階C で再評価する論点
 
 - bundle 構造の重み付け (案C プロンプト改善時)
 - content_before/after の独自 JSON 化 (cheerio パース失敗が多発する場合)
 - protected_regions の CSS class set 動的取得 (config 化)
 - WordPress raw context 取得権限の整備 (将来、Gutenberg block JSON 直接処理)
+- C-D 照合の `.text()` 抽出ベース格上げ (HTML 属性混入リスク回避)
+- C-D 必須表現 / 正式表記 への対応拡張 (LLM 委譲 or キーワード文脈判定)
+- master_rules 21 件の verified 昇格運用 (現状 draft、smoke 内で一時昇格)
 
 ---
 
