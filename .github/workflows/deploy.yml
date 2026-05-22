@@ -30,9 +30,15 @@ jobs:
           GIT_SSH_COMMAND="ssh -i /root/.ssh/github_deploy" git reset --hard origin/main
           cd node
           npm ci --no-audit --no-fund
-          cd client
+          cd cta-client
           npm ci --no-audit --no-fund
           npm run build
+          cd ../rewrite-client
+          # rewrite-client は cta-client の node_modules をシンボリックリンクで共有
+          rm -rf node_modules
+          ln -s ../cta-client/node_modules node_modules
+          npm run build
+          cd ..
           pm2 restart rewrite-app --update-env
           pm2 save
           echo "deployed: $(git -C /opt/s-tools rev-parse --short HEAD)"

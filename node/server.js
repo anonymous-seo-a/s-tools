@@ -15,8 +15,11 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// React ビルド済みファイルを配信（本番用）
-app.use(express.static(path.join(__dirname, 'client/dist')));
+// SPA ビルド済みファイルを配信（本番用）
+// /cta/  → CTA Gap Fill Manager (既存 SPA)
+// /rewrite/ → リライトツール (Phase 3 で新規 SPA)
+app.use('/cta', express.static(path.join(__dirname, 'cta-client/dist')));
+app.use('/rewrite', express.static(path.join(__dirname, 'rewrite-client/dist')));
 
 // マスター管理 API（Phase E）
 app.use('/api/masters', mastersRoutes);
@@ -1230,9 +1233,37 @@ app.get('/api/monitor/jobs', (req, res) => {
   }
 });
 
-// React SPA フォールバック
-app.get('/{0,}', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+// ランディング (ルート) — 2 つの SPA への入口
+app.get('/', (req, res) => {
+  res.send(`<!doctype html>
+<html lang="ja"><head><meta charset="UTF-8"><title>s-tools</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; margin: 0; padding: 48px 24px; color: #333; }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 24px; }
+  .card { display: block; background: white; border-radius: 12px; padding: 24px 28px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-decoration: none; color: inherit; transition: transform 0.1s; }
+  .card:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .card-title { font-size: 18px; font-weight: 600; color: #1565c0; margin-bottom: 6px; }
+  .card-desc { font-size: 13px; color: #666; line-height: 1.6; }
+</style></head><body><div class="wrap">
+  <h1>s-tools</h1>
+  <a class="card" href="/cta/"><div class="card-title">CTA Gap Fill Manager</div><div class="card-desc">既存記事への CTA 自動挿入 / 監査 / 商材管理 / 順位モニタリング</div></a>
+  <a class="card" href="/rewrite/"><div class="card-title">リライトツール</div><div class="card-desc">YMYL 記事の自走リライト (対象選定 / 分析 / 差分生成 / 判定 / 適用)</div></a>
+</div></body></html>`);
+});
+
+// SPA フォールバック (deep link 用)
+app.get(/^\/cta(\/.*)?$/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'cta-client/dist/index.html'));
+});
+app.get(/^\/rewrite(\/.*)?$/, (req, res) => {
+  const distIndex = path.join(__dirname, 'rewrite-client/dist/index.html');
+  const fs = require('fs');
+  if (fs.existsSync(distIndex)) return res.sendFile(distIndex);
+  res.status(503).send(`<!doctype html><html lang="ja"><head><meta charset="UTF-8"><title>リライトツール (準備中)</title>
+<style>body{font-family:-apple-system,sans-serif;padding:48px;text-align:center;color:#666}h1{color:#1565c0}</style></head><body>
+<h1>リライトツール</h1><p>準備中 (Step α-3, α-4 で構築予定)</p>
+<p><a href="/">← s-tools トップへ</a></p></body></html>`);
 });
 
 const PORT = process.env.PORT || 3000;
