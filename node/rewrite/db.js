@@ -21,13 +21,13 @@ function open() {
 
 function initSchema() {
   const conn = open();
-  const row = conn.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name LIKE 'master_%'").get();
-  if (row.n > 0) return { initialized: false, existing_tables: row.n };
-
+  const before = conn.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name LIKE 'master_%'").get();
+  // schema.sql は全 CREATE TABLE / CREATE INDEX を IF NOT EXISTS で書いてあるため毎回 exec で idempotent。
+  // Phase E のみ初期化された旧スナップショットでも、不足分のみ追加される。
   const ddl = fs.readFileSync(SCHEMA_PATH, 'utf8');
   conn.exec(ddl);
   const after = conn.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name LIKE 'master_%'").get();
-  return { initialized: true, created_tables: after.n };
+  return { initialized: true, existing_tables: before.n, total_tables: after.n, added_tables: after.n - before.n };
 }
 
 function attachMonitorReadOnly(conn) {

@@ -1283,6 +1283,11 @@ app.listen(PORT, () => {
     const checkTotal = masterDb.listChecklist().length;
     console.log(`[masters] DB ready (annotations: ${annTotal}, rules: ${ruleTotal}, checklist: ${checkTotal})`);
 
+    // rewrite.db schema 同期 (Phase 2 以降の 26 テーブル / 72 indexes、CREATE ... IF NOT EXISTS で idempotent)
+    const rewriteDb = require('./rewrite/db');
+    const rewriteInit = rewriteDb.initSchema();
+    console.log(`[rewrite] DB ready (existing=${rewriteInit.existing_tables} → total=${rewriteInit.total_tables}, added=${rewriteInit.added_tables})`);
+
     // 初回起動: メトリクスが空ならバックフィル自動開始（stage 1 = 30日分）
     if (metricsCount === 0) {
       console.log('[monitor] empty DB detected, auto-starting staged backfill');
