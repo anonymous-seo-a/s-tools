@@ -69,23 +69,31 @@ async function collectCompetitorCorpus(query_fanout_id, { topN = 5, excludeDomai
     throw new Error(`master_query_fanout id=${query_fanout_id} not found`);
   }
 
-  const { searchSerp } = require('../../shared/serpapi-adapter');
-  const serp = await searchSerp(parent.sub_query);
+  // SERP 取得は Yahoo スクレイピングを既定 (SerpApi 不要)。throttle 時のみ SERPAPI_API_KEY
+  // があれば SerpApi にフォールバック。
+  let pool;
+  let serpSource = 'yahoo';
+  try {
+    const { searchYahooResults } = require('../../monitor-scraper');
+    pool = await searchYahooResults(parent.sub_query, { topN: Math.max(topN * 3, 15) });
+  } catch (e) {
+    if (process.env.SERPAPI_API_KEY) {
+      const { searchSerp } = require('../../shared/serpapi-adapter');
+      const serp = await searchSerp(parent.sub_query);
+      pool = (serp.organic || []).map((r, i) => ({ link: r.link, position: r.position ?? i + 1 }));
+      serpSource = 'serpapi(fallback)';
+    } else {
+      throw new Error(`Yahoo SERP 取得失敗 (SerpApi 鍵も無し): ${e.message}`);
+    }
+  }
   // mediaOnly: 企業公式/政府を除外してメディア/比較サイトのみを上位 topN 競合に。
-  const pool = (serp.organic || []).filter((r) => r.link && typeof r.position === 'number');
+  pool = (pool || []).filter((r) => r.link && typeof r.position === 'number');
   const filtered = mediaOnly ? pool.filter((r) => !isExcludedDomain(r.link, excludeDomains)) : pool;
   const excluded = pool.filter((r) => mediaOnly && isExcludedDomain(r.link, excludeDomains)).map((r) => r.link);
   const organic = filtered.slice(0, topN);
   const competitor_url_count = organic.length;
 
-  const serp_features = JSON.stringify({
-    has_paa: serp.paa.length > 0,
-    has_ai_overview: serp.ai_overview_citations.length > 0,
-    has_related_searches: serp.related_searches.length > 0,
-    paa_count: serp.paa.length,
-    related_searches_count: serp.related_searches.length,
-    ai_overview_citations_count: serp.ai_overview_citations.length,
-  });
+  const serp_features = JSON.stringify({ source: serpSource });
 
   const insert = conn.prepare(
     `INSERT OR IGNORE INTO master_competitor_corpus

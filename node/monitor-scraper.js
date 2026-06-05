@@ -104,4 +104,47 @@ async function runYahooDailyScrape({ limit = 200, intervalSec = 15, onProgress }
   }
 }
 
-module.exports = { runYahooDailyScrape, searchYahooRank };
+/**
+ * Yahoo! 検索のクエリ上位 organic 結果 URL を返す (競合コーパス取得用、SerpApi 代替)。
+ * yahoo 内部 (知恵袋等) は除外、hash/query を落として origin+path で dedupe。
+ * @returns Array<{ link, position }>
+ */
+async function searchYahooResults(keyword, { topN = 10, maxPages = 2 } = {}) {
+  const seen = new Set();
+  const out = [];
+  for (let page = 0; page < maxPages && out.length < topN; page++) {
+    const start = page * RESULTS_PER_PAGE + 1;
+    const searchUrl = `https://search.yahoo.co.jp/search?p=${encodeURIComponent(keyword)}&b=${start}`;
+    const res = await fetch(searchUrl, {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
+    });
+    if (!res.ok) {
+      if (res.status === 429 || res.status === 403) throw new Error(`Yahoo throttled: HTTP ${res.status}`);
+      break;
+    }
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const hrefs = [];
+    $('.sw-Card__titleInner a, .sw-Card__title a, h3 a').each((_, el) => {
+      const h = $(el).attr('href');
+      if (h && /^https?:\/\//.test(h)) hrefs.push(h);
+    });
+    for (const h of hrefs) {
+      let u;
+      try { u = new URL(h); } catch { continue; }
+      const host = u.hostname.toLowerCase();
+      if (/(^|\.)yahoo\.co\.jp$/.test(host) || /(^|\.)yahoo\.com$/.test(host)) continue; // yahoo 内部/知恵袋 除外
+      const clean = `${u.origin}${u.pathname}`.replace(/\/+$/, '');
+      const key = clean.replace(/^https?:\/\/(www\.)?/, '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ link: clean, position: out.length + 1 });
+      if (out.length >= topN) break;
+    }
+    if (hrefs.length < 5) break;
+    await sleep(1200);
+  }
+  return out;
+}
+
+module.exports = { runYahooDailyScrape, searchYahooRank, searchYahooResults };
