@@ -26,10 +26,13 @@
 
 const cheerio = require('cheerio');
 
-// 置換時に「丸ごと消えてよい」= 安全に再生成できるブロック型。これ以外を含む section は置換しない。
+// run (本文の連続塊) を構成できる = 安全に書き換えてよいブロック型。
 const SAFE_BLOCK_TYPES = new Set([
-  'paragraph', 'heading', 'list', 'list-item', 'quote', 'table', 'separator', 'spacer',
+  'paragraph', 'list', 'list-item', 'quote', 'table', 'separator', 'spacer',
 ]);
+
+// content_before(run markup) に紛れていてはいけない保護ブロックの検出 (run 分割不正の防御)。
+const PROTECTED_MARKUP_RE = /<!--\s*wp:(?:block|image|html|embed|shortcode)\b|<!--\s*wp:[a-z0-9-]+\//;
 
 // ─────────────────────────────────────────────────────────────
 // Gutenberg ブロックパーサ (top-level、入れ子は深さで1ブロックに畳む)
@@ -126,6 +129,34 @@ function sectionBlockRange(blocks, headingIdx) {
   return { startIdx: headingIdx, endIdx };
 }
 
+// section 本文を「run」(保護ブロックで区切られた連続本文ブロックの塊) に分割する。
+// 生成側 (diff-runner) が各 run を rewrite 単位として LLM に提示し、content_before に run の
+// raw markup を入れる。apply 側はその markup を照合して run の位置で置換する。
+//   @returns Array<{ run_index, start, end, markup, text }>
+function segmentSectionRuns(raw, blocks, headingIdx) {
+  const { endIdx } = sectionBlockRange(blocks, headingIdx);
+  const runs = [];
+  let cur = [];
+  const flush = () => {
+    if (!cur.length) return;
+    const first = cur[0], last = cur[cur.length - 1];
+    const markup = raw.slice(first.start, last.end);
+    runs.push({ run_index: runs.length, start: first.start, end: last.end, markup, text: blocksPlainText(cur) });
+    cur = [];
+  };
+  for (let i = headingIdx + 1; i <= endIdx; i++) {
+    const b = blocks[i];
+    const editable = !b.isProtected && b.type !== 'heading' && SAFE_BLOCK_TYPES.has(b.type);
+    if (editable) cur.push(b); else flush();
+  }
+  flush();
+  return runs;
+}
+
+function blocksPlainText(blocks) {
+  return blocks.map((b) => b.markup.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+}
+
 // ─────────────────────────────────────────────────────────────
 // HTML → Gutenberg ブロック markup
 // ─────────────────────────────────────────────────────────────
@@ -188,7 +219,7 @@ function wrapBlock(type, innerHtml, attrs) {
 // ─────────────────────────────────────────────────────────────
 
 const INSERT_TYPES = new Set(['insert_before', 'insert_after', 'insert_evidence']);
-const REWRITE_TYPES = new Set(['rewrite_section', 'rewrite_paragraph']);
+const REWRITE_TYPES = new Set(['rewrite_section', 'rewrite_paragraph', 'rewrite_run']);
 
 /**
  * @param {string} raw content.raw
@@ -240,18 +271,25 @@ function planGutenbergApply(raw, diffs) {
       continue;
     }
 
-    // rewrite: section 内に保護ブロックがあれば skip
-    const sectionBlocks = blocks.slice(hIdx, endIdx + 1);
-    const protectedBlocks = sectionBlocks.filter((b) => b.isProtected || (b.type !== 'heading' && !SAFE_BLOCK_TYPES.has(b.type)));
-    if (protectedBlocks.length > 0) {
-      skipped.push({
-        diff_id: d.id,
-        reason: `section に保護ブロックあり (${[...new Set(protectedBlocks.map((b) => b.type))].join(',')}) → 手動。自動置換せず`,
-      });
+    // rewrite: content_before(= run の raw markup) を target section 内で照合し、その範囲だけ置換。
+    // 保護ブロック(再利用/CTA/画像)は content_before に含まれない=不動。run の位置も保たれるため
+    // 「表の後ろの独立本文」も元位置で書き換わる。
+    const before = (d.content_before || '').trim();
+    if (!before) {
+      skipped.push({ diff_id: d.id, reason: 'rewrite に content_before(run markup) が無い (raw/run ベース生成が必要)' });
       continue;
     }
-    // 全ブロック安全 → section を置換 (見出し自体も content_after に含まれる前提)
-    ops.push({ diff_id: d.id, start: anchor.start, end: blocks[endIdx].end, markup });
+    if (PROTECTED_MARKUP_RE.test(before)) {
+      skipped.push({ diff_id: d.id, reason: 'content_before に保護ブロックが含まれる (run 分割不正) → skip' });
+      continue;
+    }
+    const sectionEnd = blocks[endIdx].end;
+    const matchAt = raw.indexOf(before, anchor.start);
+    if (matchAt < 0 || matchAt >= sectionEnd) {
+      skipped.push({ diff_id: d.id, reason: 'run が target section 内に見つからない (記事変動 or content_before 不一致)' });
+      continue;
+    }
+    ops.push({ diff_id: d.id, start: matchAt, end: matchAt + before.length, markup });
     planned.push({ diff_id: d.id, target_section: d.target_section, op: 'rewrite', after_len: after.length });
   }
 
@@ -284,6 +322,7 @@ module.exports = {
   parseTarget,
   findHeadingIndex,
   sectionBlockRange,
+  segmentSectionRuns,
   htmlToBlocks,
   planGutenbergApply,
   applyGutenbergOps,

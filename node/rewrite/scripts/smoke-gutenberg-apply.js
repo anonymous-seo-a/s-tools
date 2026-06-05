@@ -1,140 +1,146 @@
 'use strict';
-// gutenberg-apply 中核エンジンの検証 (合成 raw、WP 非依存)。
+// gutenberg-apply 中核エンジン (run レベル) の検証 (合成 raw、WP 非依存)。
 
 const assert = require('assert');
 const {
   parseTopLevelBlocks, isProtectedType, htmlToBlocks,
-  planGutenbergApply, applyGutenbergOps, sectionBlockRange, findHeadingIndex,
+  planGutenbergApply, applyGutenbergOps, segmentSectionRuns, findHeadingIndex, parseTarget,
 } = require('../apply/gutenberg-apply');
 
 let pass = 0;
 const ok = (c, m) => { assert.ok(c, m); console.log('  ✓', m); pass++; };
 const eq = (a, b, m) => { assert.strictEqual(a, b, `${m} (got ${JSON.stringify(a)})`); console.log('  ✓', m); pass++; };
 
-// 実構造を模した raw: 段落・見出し・再利用ブロック ref・独自CTA・入れ子(columns)・list
+// 実構造を模した raw。証券カード型: 見出し + リード本文 + 再利用ブロック + 表の後ろの独立本文。
 const RAW = [
   '<!-- wp:heading -->\n<h2>導入セクション</h2>\n<!-- /wp:heading -->',
   '<!-- wp:paragraph -->\n<p>導入の段落その1。十分な長さの説明文をここに置きます。</p>\n<!-- /wp:paragraph -->',
   '<!-- wp:paragraph -->\n<p>導入の段落その2。さらに説明を続けます。</p>\n<!-- /wp:paragraph -->',
-  '<!-- wp:heading -->\n<h2>ランキングセクション</h2>\n<!-- /wp:heading -->',
-  '<!-- wp:paragraph -->\n<p>ランキングの前置き段落。</p>\n<!-- /wp:paragraph -->',
+  '<!-- wp:heading -->\n<h3>1位：楽天証券</h3>\n<!-- /wp:heading -->',
+  '<!-- wp:paragraph -->\n<p>楽天証券はリード本文。手数料が業界最安水準で初心者に人気です。</p>\n<!-- /wp:paragraph -->',
   '<!-- wp:block {"ref":12345} /-->',
-  '<!-- wp:soico-cta/cardloan-inline-cta {"partner":"acom"} /-->',
-  '<!-- wp:heading -->\n<h2>FAQセクション</h2>\n<!-- /wp:heading -->',
-  '<!-- wp:list -->\n<ul><li>Q1</li><li>Q2</li></ul>\n<!-- /wp:list -->',
+  '<!-- wp:soico-cta/securities-spec-table {"partner":"rakuten"} /-->',
+  '<!-- wp:paragraph -->\n<p>表の後ろの独立本文。米国株の取扱が豊富で積立にも対応しています。</p>\n<!-- /wp:paragraph -->',
+  '<!-- wp:soico-cta/securities-cta {"partner":"rakuten"} /-->',
+  '<!-- wp:paragraph -->\n<p>CTAの後ろの締め本文。総合力で1位にふさわしい証券会社です。</p>\n<!-- /wp:paragraph -->',
+  '<!-- wp:heading -->\n<h2>まとめ</h2>\n<!-- /wp:heading -->',
+  '<!-- wp:paragraph -->\n<p>まとめの段落。十分な長さがあります。</p>\n<!-- /wp:paragraph -->',
 ].join('\n\n');
+
+const BLOCKS = parseTopLevelBlocks(RAW);
+const idxOf = (t) => findHeadingIndex(BLOCKS, parseTarget(t));
 
 console.log('§1 ブロックパース');
 {
-  const blocks = parseTopLevelBlocks(RAW);
-  const types = blocks.map((b) => b.type);
-  eq(blocks.length, 9, 'top-level ブロック数 9');
-  ok(types.filter((t) => t === 'heading').length === 3, 'heading 3');
-  ok(types.includes('block') && types.includes('soico-cta/cardloan-inline-cta'), '再利用/CTA ブロック検出');
-  const refBlock = blocks.find((b) => b.type === 'block');
-  ok(refBlock.selfClosing && refBlock.isProtected, '再利用ブロックは self-close & protected');
-  ok(blocks.find((b) => b.type === 'soico-cta/cardloan-inline-cta').isProtected, 'CTA は protected');
-  const h2 = blocks.find((b) => b.type === 'heading');
-  eq(h2.headingLevel, 2, '見出しレベル抽出');
-  eq(h2.headingText, '導入セクション', '見出しテキスト抽出');
-  // markup が原文と一致 (offset 正確性)
-  ok(RAW.slice(refBlock.start, refBlock.end) === refBlock.markup, 'block.start/end が原文に整合');
+  eq(BLOCKS.length, 12, 'top-level ブロック数 12');
+  ok(BLOCKS.filter((b) => b.type === 'heading').length === 3, 'heading 3');
+  ok(BLOCKS.find((b) => b.type === 'block').isProtected, '再利用ブロック protected');
+  ok(BLOCKS.find((b) => b.type === 'soico-cta/securities-spec-table').isProtected, 'CTA spec-table protected');
 }
 
-console.log('§2 入れ子ブロックを1つに畳む');
+console.log('§2 segmentSectionRuns: カード section は run が「表の前/後/締め」3つ');
 {
-  const nested = '<!-- wp:columns -->\n<!-- wp:column -->\n<!-- wp:paragraph -->\n<p>中</p>\n<!-- /wp:paragraph -->\n<!-- /wp:column -->\n<!-- /wp:columns -->';
-  const b = parseTopLevelBlocks(nested);
-  eq(b.length, 1, 'columns 入れ子は top-level 1 ブロック');
-  eq(b[0].type, 'columns', 'type=columns');
-  ok(b[0].isProtected === false, 'columns は protected ではない(が SAFE_TYPES外→置換時は保護扱い)');
+  const hIdx = idxOf('h3#1位：楽天証券');
+  const runs = segmentSectionRuns(RAW, BLOCKS, hIdx);
+  eq(runs.length, 3, 'run 数 3 (リード / 表の後 / CTAの後)');
+  ok(runs[0].markup.includes('リード本文'), 'run0 = リード');
+  ok(runs[1].markup.includes('表の後ろの独立本文'), 'run1 = 表の後ろ本文');
+  ok(runs[2].markup.includes('CTAの後ろの締め本文'), 'run2 = 締め');
+  ok(!runs.some((r) => /wp:block|soico-cta/.test(r.markup)), 'run に保護ブロックは含まれない');
 }
 
-console.log('§3 isProtectedType');
+console.log('§3 run 単位 rewrite: 表の後ろの本文(run1)だけ置換、保護ブロックは位置保持');
 {
-  ok(isProtectedType('block') && isProtectedType('image') && isProtectedType('html'), '再利用/画像/html は protected');
-  ok(isProtectedType('soico-cta/x') && isProtectedType('core/embed') === false ? true : isProtectedType('embed'), '名前空間付きは protected');
-  ok(!isProtectedType('paragraph') && !isProtectedType('heading'), 'paragraph/heading は非protected');
-}
-
-console.log('§4 htmlToBlocks');
-{
-  const blk = htmlToBlocks('<h2>新見出し</h2><p>新段落です。十分長い文章。</p><ul><li>項目</li></ul>');
-  ok(/<!-- wp:heading -->/.test(blk), 'heading ブロック化');
-  ok(/<!-- wp:paragraph -->/.test(blk), 'paragraph ブロック化');
-  ok(/<!-- wp:list/.test(blk), 'list ブロック化');
-  // section ラッパは展開される
-  const wrapped = htmlToBlocks('<section><p>包まれた段落。十分な長さ。</p></section>');
-  ok(/<!-- wp:paragraph -->/.test(wrapped) && !/<section/.test(wrapped), 'section ラッパは展開して中身をブロック化');
-}
-
-console.log('§5 insert_before / insert_after');
-{
-  const diffs = [
-    { id: 1, target_section: 'h2#FAQセクション', change_type: 'insert_before', daiki_judgment: 'approved', content_after: '<h2>新FAQ前置き</h2><p>挿入される前置き段落。十分な長さ。</p>' },
-    { id: 2, target_section: 'h2#導入セクション', change_type: 'insert_after', daiki_judgment: 'approved', content_after: '<p>導入の後ろに足す段落。十分な長さがあります。</p>' },
-  ];
+  const hIdx = idxOf('h3#1位：楽天証券');
+  const runs = segmentSectionRuns(RAW, BLOCKS, hIdx);
+  const diffs = [{
+    id: 1, target_section: 'h3#1位：楽天証券', change_type: 'rewrite_run', daiki_judgment: 'approved',
+    content_before: runs[1].markup,  // 表の後ろの run
+    content_after: '<p>表の後ろの本文を書き換えました。NISA対応や米国株手数料が魅力です。</p>',
+  }];
   const plan = planGutenbergApply(RAW, diffs);
-  eq(plan.planned.length, 2, 'insert 2 件 planned');
+  eq(plan.planned.length, 1, 'planned 1');
   const res = applyGutenbergOps(RAW, plan.ops);
-  eq(res.conflicts.length, 0, '競合なし');
-  ok(/新FAQ前置き/.test(res.raw), 'insert_before 反映');
-  ok(/導入の後ろに足す段落/.test(res.raw), 'insert_after 反映');
-  // 再利用ブロック・CTA が保持されている
+  ok(res.raw.includes('表の後ろの本文を書き換えました'), 'run1 置換反映');
+  ok(!res.raw.includes('表の後ろの独立本文。米国株'), '旧 run1 消去');
+  ok(res.raw.includes('リード本文'), 'run0(リード) は無傷');
+  ok(res.raw.includes('CTAの後ろの締め本文'), 'run2(締め) は無傷');
   ok(/wp:block \{"ref":12345\}/.test(res.raw), '再利用ブロック保持');
-  ok(/soico-cta\/cardloan-inline-cta/.test(res.raw), 'CTA ブロック保持');
-  // insert_before は FAQ 見出しの前に入る
-  ok(res.raw.indexOf('新FAQ前置き') < res.raw.indexOf('FAQセクション'), 'insert_before は見出し前');
+  ok(/soico-cta\/securities-spec-table/.test(res.raw) && /soico-cta\/securities-cta/.test(res.raw), 'spec表/CTA 保持');
+  // 位置検証: 表(spec-table)は run1新本文より前、CTAは run1新本文より後ろ
+  ok(res.raw.indexOf('securities-spec-table') < res.raw.indexOf('書き換えました'), 'spec表は新run1の前(位置保持)');
+  ok(res.raw.indexOf('書き換えました') < res.raw.indexOf('securities-cta'), '新run1はCTAの前(位置保持)');
 }
 
-console.log('§6 rewrite: 安全 section は置換');
+console.log('§4 複数 run を同時 rewrite (リード+締め)、間の表/CTA/中間本文は不動');
 {
-  // 導入セクション = heading + paragraph×2 のみ (安全)
-  const diffs = [{ id: 3, target_section: 'h2#導入セクション', change_type: 'rewrite_section', daiki_judgment: 'approved', content_after: '<h2>導入セクション(改)</h2><p>書き換えた導入。十分な長さの新しい文章です。</p>' }];
+  const hIdx = idxOf('h3#1位：楽天証券');
+  const runs = segmentSectionRuns(RAW, BLOCKS, hIdx);
+  const diffs = [
+    { id: 2, target_section: 'h3#1位：楽天証券', change_type: 'rewrite_run', daiki_judgment: 'approved', content_before: runs[0].markup, content_after: '<p>新リード。楽天証券の総合評価を刷新しました。</p>' },
+    { id: 3, target_section: 'h3#1位：楽天証券', change_type: 'rewrite_run', daiki_judgment: 'approved', content_before: runs[2].markup, content_after: '<p>新しい締め本文。手数料の安さが決め手です。</p>' },
+  ];
   const plan = planGutenbergApply(RAW, diffs);
-  eq(plan.planned.length, 1, '安全 section は planned');
+  eq(plan.planned.length, 2, 'planned 2');
   const res = applyGutenbergOps(RAW, plan.ops);
-  ok(/導入セクション\(改\)/.test(res.raw), '置換反映');
-  ok(!/導入の段落その1/.test(res.raw), '旧段落が消えた');
-  ok(/ランキングセクション/.test(res.raw) && /wp:block \{"ref":12345\}/.test(res.raw), '他 section と再利用ブロックは保持');
+  ok(res.conflicts.length === 0, '競合なし (run は重ならない)');
+  ok(res.raw.includes('新リード') && res.raw.includes('新しい締め本文'), '両 run 置換');
+  ok(res.raw.includes('表の後ろの独立本文'), '中間 run(run1) は不動');
+  ok(/wp:block \{"ref":12345\}/.test(res.raw) && /securities-cta/.test(res.raw), '保護ブロック全保持');
 }
 
-console.log('§7 rewrite: 保護ブロックを含む section は skip+報告');
+console.log('§5 保護ブロックの無い section は body 全体が1 run');
 {
-  // ランキングセクション = paragraph + 再利用ブロック + CTA (保護あり)
-  const diffs = [{ id: 4, target_section: 'h2#ランキングセクション', change_type: 'rewrite_section', daiki_judgment: 'approved', content_after: '<h2>ランキング(改)</h2><p>書き換え。十分な長さ。</p>' }];
+  const hIdx = idxOf('h2#導入セクション');
+  const runs = segmentSectionRuns(RAW, BLOCKS, hIdx);
+  eq(runs.length, 1, 'run 1 (段落2つが1 run)');
+  const diffs = [{ id: 4, target_section: 'h2#導入セクション', change_type: 'rewrite_section', daiki_judgment: 'approved', content_before: runs[0].markup, content_after: '<p>書き換えた導入本文。新しい説明をここに置きます。</p>' }];
   const plan = planGutenbergApply(RAW, diffs);
-  eq(plan.planned.length, 0, 'planned 0');
-  ok(/保護ブロックあり/.test(plan.skipped[0].reason), `skip 理由が保護ブロック: "${plan.skipped[0].reason}"`);
+  eq(plan.planned.length, 1, 'planned 1');
+  const res = applyGutenbergOps(RAW, plan.ops);
+  ok(res.raw.includes('書き換えた導入本文') && !res.raw.includes('導入の段落その1'), '本文置換');
+  ok(res.raw.includes('<h2>導入セクション</h2>'), '見出しは保持 (run に含まれない)');
 }
 
-console.log('§8 アンカー無し / 未承認 / 非対象 change_type');
+console.log('§6 insert_before / insert_after (再利用/CTA 保持)');
 {
   const diffs = [
-    { id: 5, target_section: 'h2#存在しない見出し', change_type: 'insert_after', daiki_judgment: 'approved', content_after: '<p>x</p>' },
-    { id: 6, target_section: 'h2#導入セクション', change_type: 'rewrite_section', daiki_judgment: 'pending', content_after: '<p>x</p>' },
-    { id: 7, target_section: 'meta:title', change_type: 'update_title', daiki_judgment: 'approved', content_after: '<title>x</title>' },
+    { id: 5, target_section: 'h2#まとめ', change_type: 'insert_before', daiki_judgment: 'approved', content_after: '<h2>新セクション</h2><p>まとめ前に挿入。十分な長さ。</p>' },
+    { id: 6, target_section: 'h3#1位：楽天証券', change_type: 'insert_after', daiki_judgment: 'approved', content_after: '<p>カード末尾に追記。十分な長さ。</p>' },
+  ];
+  const plan = planGutenbergApply(RAW, diffs);
+  eq(plan.planned.length, 2, 'insert 2 planned');
+  const res = applyGutenbergOps(RAW, plan.ops);
+  ok(res.raw.includes('まとめ前に挿入') && res.raw.includes('カード末尾に追記'), '挿入反映');
+  ok(/wp:block \{"ref":12345\}/.test(res.raw), '再利用ブロック保持');
+  ok(res.raw.indexOf('新セクション') < res.raw.indexOf('<h2>まとめ'), 'insert_before は見出し前');
+}
+
+console.log('§7 drift / 未承認 / 非対象 / content_before 無し');
+{
+  const diffs = [
+    { id: 7, target_section: 'h3#1位：楽天証券', change_type: 'rewrite_run', daiki_judgment: 'approved', content_before: '<!-- wp:paragraph -->\n<p>存在しない原文</p>\n<!-- /wp:paragraph -->', content_after: '<p>x</p>' },
+    { id: 8, target_section: 'h2#導入セクション', change_type: 'rewrite_run', daiki_judgment: 'pending', content_before: 'x', content_after: '<p>x</p>' },
+    { id: 9, target_section: 'meta:title', change_type: 'update_title', daiki_judgment: 'approved', content_after: '<title>x</title>' },
+    { id: 10, target_section: 'h2#まとめ', change_type: 'rewrite_run', daiki_judgment: 'approved', content_after: '<p>x</p>' }, // content_before 無し
   ];
   const plan = planGutenbergApply(RAW, diffs);
   eq(plan.planned.length, 0, 'planned 0');
-  ok(plan.skipped.some((s) => /見つからない/.test(s.reason)), 'アンカー無し skip');
+  ok(plan.skipped.some((s) => /見つからない/.test(s.reason)), 'drift skip');
   ok(plan.skipped.some((s) => /not approved/.test(s.reason)), '未承認 skip');
-  ok(plan.skipped.some((s) => /非対象/.test(s.reason)), 'meta は非対象 skip');
+  ok(plan.skipped.some((s) => /非対象/.test(s.reason)), 'meta 非対象 skip');
+  ok(plan.skipped.some((s) => /content_before/.test(s.reason)), 'content_before 無し skip');
 }
 
-console.log('§9 複数 op の offset 保全 (同時適用)');
+console.log('§8 防御: content_before に保護ブロックが紛れていたら skip');
 {
-  const diffs = [
-    { id: 8, target_section: 'h2#導入セクション', change_type: 'insert_before', daiki_judgment: 'approved', content_after: '<p>最上部に挿入。十分な長さの文章。</p>' },
-    { id: 9, target_section: 'h2#FAQセクション', change_type: 'insert_after', daiki_judgment: 'approved', content_after: '<p>最下部に挿入。十分な長さの文章。</p>' },
-    { id: 10, target_section: 'h2#導入セクション', change_type: 'rewrite_section', daiki_judgment: 'approved', content_after: '<h2>導入(改)</h2><p>新本文。十分な長さ。</p>' },
-  ];
+  const hIdx = idxOf('h3#1位：楽天証券');
+  // 不正な content_before (再利用ブロックを含む)
+  const bad = RAW.slice(BLOCKS[hIdx + 1].start, BLOCKS[hIdx + 2].end); // リード + 再利用ブロック
+  const diffs = [{ id: 11, target_section: 'h3#1位：楽天証券', change_type: 'rewrite_run', daiki_judgment: 'approved', content_before: bad, content_after: '<p>x</p>' }];
   const plan = planGutenbergApply(RAW, diffs);
-  // id8(insert_before 導入) と id10(rewrite 導入) は範囲が重なる → applyGutenbergOps で競合検出
-  const res = applyGutenbergOps(RAW, plan.ops);
-  ok(/最下部に挿入/.test(res.raw), 'FAQ への insert_after は反映');
-  ok(res.conflicts.length >= 1 || (/最上部に挿入/.test(res.raw) && /導入\(改\)/.test(res.raw)), '重なり op は競合検出 or 両立');
-  ok(/wp:block \{"ref":12345\}/.test(res.raw), '再利用ブロック保持(全 op 適用後)');
+  eq(plan.planned.length, 0, 'planned 0');
+  ok(/保護ブロックが含まれる/.test(plan.skipped[0].reason), '保護ブロック混入を検出して skip');
 }
 
 console.log(`\nALL PASS (${pass} assertions)`);
