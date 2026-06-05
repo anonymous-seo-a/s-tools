@@ -608,12 +608,11 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
   );
 }
 
-function GenerationPanel({ showToast, onSessionCreated }) {
+function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   const [postId, setPostId] = useState('');
   const [queryFanouts, setQueryFanouts] = useState([]);
   const [queryFanoutId, setQueryFanoutId] = useState('');
   const [enableCompliance, setEnableCompliance] = useState(true);
-  const [genre, setGenre] = useState('cardloan');
   const [job, setJob] = useState(null);
   const [candidates, setCandidates] = useState([]);
   const [candLoading, setCandLoading] = useState(false);
@@ -632,8 +631,9 @@ function GenerationPanel({ showToast, onSessionCreated }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 自動ピック候補をカテゴリ変更時にロード (順位モニタリング由来)
+  // 自動ピック候補をカテゴリ変更時にロード (順位モニタリング由来)。全カテゴリ時は出さない。
   useEffect(() => {
+    if (!genre || genre === 'all') { setCandidates([]); setCandLoading(false); return; }
     setCandLoading(true);
     api.getRewriteCandidates(genre, 20)
       .then((r) => setCandidates(r.items || []))
@@ -776,7 +776,7 @@ function GenerationPanel({ showToast, onSessionCreated }) {
 
 export default function RewriteJudgmentView({ showToast }) {
   const [status, setStatus] = useState('awaiting_diff_judgment');
-  const [genre, setGenre] = useState('');
+  const [genre, setGenre] = useState('cardloan');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -801,6 +801,8 @@ export default function RewriteJudgmentView({ showToast }) {
     <div>
       <GenerationPanel
         showToast={showToast}
+        genre={genre}
+        setGenre={setGenre}
         onSessionCreated={(sid) => { load(); setSelectedId(sid); }}
       />
 

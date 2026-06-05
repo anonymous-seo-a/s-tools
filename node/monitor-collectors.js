@@ -16,6 +16,19 @@ const KEY_FILE = process.env.GOOGLE_APPLICATION_CREDENTIALS
 const GA4_PROPERTY_ID = (process.env.GA4_PROPERTY_ID || '516785717').replace(/^properties\//, '');
 const GSC_SITE_URL = process.env.GSC_PROPERTY_URL || 'https://www.soico.jp/no1/';
 
+// WP REST 認証は動作確認済みの WP_API_* (soico-cvr-system) を優先。未設定時のみ config.wp(CTA系)。
+// (旧: config.wp 固定だったが、その creds はローカル .env に無く fetchWpMeta が undefined URL で失敗していた)
+function wpRestBase() {
+  const b = process.env.WP_API_BASE_URL;
+  if (b) return b.endsWith('/wp-json/wp/v2') ? b : `${b.replace(/\/$/, '')}/wp-json/wp/v2`;
+  return config.wp.restBase;
+}
+function wpAuthB64() {
+  const u = process.env.WP_API_USERNAME || config.wp.username;
+  const p = process.env.WP_API_APP_PASSWORD || config.wp.appPassword;
+  return Buffer.from(`${u}:${p}`).toString('base64');
+}
+
 // ============================================================
 // Google 認証
 // ============================================================
@@ -345,14 +358,14 @@ function extractPartnerFromLinkUrl(linkUrl) {
 async function fetchWpMeta(postIds) {
   if (!postIds || postIds.length === 0) return [];
   const out = [];
-  const auth = Buffer.from(`${config.wp.username}:${config.wp.appPassword}`).toString('base64');
+  const auth = wpAuthB64();
 
   // include に最大 100 個まで。チャンクして呼び出す
   const chunks = [];
   for (let i = 0; i < postIds.length; i += 100) chunks.push(postIds.slice(i, i + 100));
 
   for (const chunk of chunks) {
-    const url = `${config.wp.restBase}/posts?per_page=100&include=${chunk.join(',')}&_fields=id,title,link,modified,categories`;
+    const url = `${wpRestBase()}/posts?per_page=100&include=${chunk.join(',')}&_fields=id,title,link,modified,categories`;
     const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
     if (!res.ok) continue;
     const json = await res.json();
@@ -374,8 +387,8 @@ async function fetchWpMeta(postIds) {
  * Returns: { post_id, title, content_html, content_text } | null
  */
 async function fetchWpContent(post_id) {
-  const auth = Buffer.from(`${config.wp.username}:${config.wp.appPassword}`).toString('base64');
-  const url = `${config.wp.restBase}/posts/${post_id}?_fields=id,title,content,link,modified`;
+  const auth = wpAuthB64();
+  const url = `${wpRestBase()}/posts/${post_id}?_fields=id,title,content,link,modified`;
   const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
   if (!res.ok) return null;
   const p = await res.json();

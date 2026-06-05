@@ -128,7 +128,10 @@ async function runDailyJob() {
     }
     const result = await collectRange(start, confirmedEnd);
     db.finishJob(jobId, { rows_inserted: result.metrics, status: 'success' });
-    return { start, end: confirmedEnd, ...result };
+    // 新規記事のタイトル/更新日を補完 (これをしないと UI に notitle が出る)。失敗しても daily は成功扱い。
+    let wp_meta_filled = 0;
+    try { wp_meta_filled = (await backfillWpMeta()).filled; } catch (e) { console.warn(`[monitor] wp meta backfill skip: ${e.message}`); }
+    return { start, end: confirmedEnd, ...result, wp_meta_filled };
   } catch (e) {
     db.finishJob(jobId, { status: 'failed', error_message: e.message });
     throw e;
