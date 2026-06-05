@@ -7,7 +7,9 @@ const { runAnalysis } = require('../llm-execution/analysis-runner');
 const { runDiffGeneration } = require('../llm-execution/diff-runner');
 const { sessionCostUsd } = require('../llm-execution/cost');
 const { planGutenbergApply, applyGutenbergOps, htmlToBlocks } = require('../apply/gutenberg-apply');
-const { classifyDomain } = require('../competitor-corpus/collect');
+const { classifyDomain, collectCompetitorCorpus } = require('../competitor-corpus/collect');
+const { extractForQueryFanout } = require('../fact-set/extract');
+const { calcIgScore } = require('../fact-set/ig-score');
 
 // in-memory job ストア (server プロセス再起動で消失、明示再実行で再投入)
 //   key: session_id (number) → compliance job
@@ -31,24 +33,18 @@ async function runGenerationPipeline(job, conn) {
   const session_id = info.lastInsertRowid;
   job.session_id = session_id;
 
-  // 2. mock gap データ (smoke-e2e と同パターン、本物 passage_gap は段階C-B 領域)
+  // 2. 情報ゲイン pipeline (B): 競合コーパス → fact 抽出 → IG スコア。
+  //    既に corpus がある fanout は skip (冪等、SerpApi/LLM の無駄打ち防止)。
+  //    これにより auto-pick 生成も「競合にあり自記事に無い事実」のデータ駆動になる。
   const fanout = conn.prepare('SELECT sub_query FROM master_query_fanout WHERE id=?').get(query_fanout_id);
   if (!fanout) throw new Error(`query_fanout_id=${query_fanout_id} not found`);
-
-  const insertGap = conn.prepare(
-    `INSERT INTO master_passage_gap
-       (session_id, post_id, query_fanout_id, target_text, target_kind, fact_layer,
-        self_max_cosine, competitor_max_cosine, delta, gap_flag, judge_type, model)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  insertGap.run(session_id, post_id, query_fanout_id, fanout.sub_query, 'query', null, 0.55, 0.65, 0.05, 1, 'embedding', 'voyage-3-large');
-  insertGap.run(session_id, post_id, query_fanout_id, fanout.sub_query, 'query', null, null, null, null, 1, 'factset', null);
-  for (const f of [
-    { text: 'アコム', layer: 1, self: 0.45, comp: 0.58 },
-    { text: 'プロミス', layer: 1, self: 0.40, comp: 0.55 },
-  ]) {
-    insertGap.run(session_id, post_id, query_fanout_id, f.text, 'fact', f.layer, f.self, f.comp, -0.05, 1, 'embedding', 'voyage-3-large');
-    insertGap.run(session_id, post_id, query_fanout_id, f.text, 'fact', f.layer, null, null, null, 0, 'factset', null);
+  const hasCorpus = conn.prepare('SELECT COUNT(*) n FROM master_competitor_corpus WHERE query_fanout_id=?').get(query_fanout_id).n;
+  if (!hasCorpus) {
+    job.step = 'competitor_corpus';
+    await collectCompetitorCorpus(query_fanout_id, { topN: 5 });
+    job.step = 'fact_extraction';
+    await extractForQueryFanout({ post_id, query_fanout_id });
+    calcIgScore({ post_id, query_fanout_id });
   }
 
   // 3. runAnalysis (Opus 4.7)

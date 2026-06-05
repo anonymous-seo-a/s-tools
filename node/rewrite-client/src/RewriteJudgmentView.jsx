@@ -693,7 +693,9 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   };
 
   const stepLabel = {
-    init: '初期化中', session_init: 'セッション作成', analyzing: '分析中 (Opus)',
+    init: '初期化中', session_init: 'セッション作成',
+    competitor_corpus: '競合コーパス取得中 (SerpApi)', fact_extraction: '競合fact抽出中 (情報ゲイン)',
+    analyzing: '分析中 (Opus)',
     generating: '差分生成中 (Sonnet)', compliance: 'compliance 検査中', done: '完了',
   };
 
