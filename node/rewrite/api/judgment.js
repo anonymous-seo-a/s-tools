@@ -158,8 +158,9 @@ function planMetaDiffs(diffs) {
       if (t) { newTitle = t; meta_planned.push({ diff_id: d.id, op: 'update_title', value: t }); }
       else meta_skipped.push({ diff_id: d.id, reason: 'title 抽出不可' });
     } else if (d.change_type === 'update_meta_description') {
-      // Yoast 管理の meta description は標準 REST で書けないため当面手動。
-      meta_skipped.push({ diff_id: d.id, reason: 'meta description は Yoast 管理 (REST 自動更新 未対応) → 手動' });
+      // meta description は AIOSEO 管理 (_aioseo_description / wp_aioseo_posts)。REST 未登録のため
+      // 自動更新には WP 側で meta 登録が必要 → 当面手動 (Daiki の WP 作業)。
+      meta_skipped.push({ diff_id: d.id, reason: 'meta description は AIOSEO 管理 (REST 未登録) → 手動。WP側 meta 登録で自動化可' });
     }
   }
   return { meta_planned, meta_skipped, newTitle };
