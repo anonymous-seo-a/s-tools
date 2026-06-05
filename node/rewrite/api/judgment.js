@@ -146,11 +146,19 @@ function extractTitleText(after) {
   return (m ? m[1] : (after || '')).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// meta:description の content_after からディスクリプション文字列を取り出す。
+function extractMetaDescription(after) {
+  const m = /content\s*=\s*["']([^"']+)["']/i.exec(after || '');
+  return (m ? m[1] : (after || '')).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+}
+
 // 本文 diff (insert/rewrite) と別に meta diff (title/description) を仕分ける。
 function planMetaDiffs(diffs) {
   const meta_planned = [];
   const meta_skipped = [];
   let newTitle = null;
+  let newMetaDesc = null;
+  let metaDescDiffId = null;
   for (const d of diffs) {
     if (d.daiki_judgment !== 'approved') continue;
     if (d.change_type === 'update_title') {
@@ -158,12 +166,28 @@ function planMetaDiffs(diffs) {
       if (t) { newTitle = t; meta_planned.push({ diff_id: d.id, op: 'update_title', value: t }); }
       else meta_skipped.push({ diff_id: d.id, reason: 'title 抽出不可' });
     } else if (d.change_type === 'update_meta_description') {
-      // meta description は AIOSEO 管理 (_aioseo_description / wp_aioseo_posts)。REST 未登録のため
-      // 自動更新には WP 側で meta 登録が必要 → 当面手動 (Daiki の WP 作業)。
-      meta_skipped.push({ diff_id: d.id, reason: 'meta description は AIOSEO 管理 (REST 未登録) → 手動。WP側 meta 登録で自動化可' });
+      const desc = extractMetaDescription(d.daiki_edit_content || d.content_after || '');
+      if (desc) { newMetaDesc = desc; metaDescDiffId = d.id; meta_planned.push({ diff_id: d.id, op: 'update_meta_description', value: desc }); }
+      else meta_skipped.push({ diff_id: d.id, reason: 'meta description 抽出不可' });
     }
   }
-  return { meta_planned, meta_skipped, newTitle };
+  return { meta_planned, meta_skipped, newTitle, newMetaDesc, metaDescDiffId };
+}
+
+// AIOSEO meta description を mu-plugin 経由で更新。未配置(404)は graceful に false。
+async function updateAioseoDescription(postId, description) {
+  const base = (process.env.WP_API_BASE_URL || '').replace(/\/$/, '');
+  // /wp-json/wp/v2 → /wp-json/soico/v1
+  const root = base.replace(/\/wp\/v2$/, '').replace(/\/wp-json$/, '/wp-json');
+  const url = `${root.endsWith('/wp-json') ? root : root.replace(/\/wp-json\/.*/, '/wp-json')}/soico/v1/aioseo-description`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: wpAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ post_id: postId, description }),
+  });
+  if (res.status === 404) return { ok: false, reason: 'mu-plugin 未配置 (soico-aioseo-rest.php)' };
+  if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
+  return { ok: true };
 }
 
 const VALID_SESSION_STATUSES = new Set([
@@ -651,13 +675,26 @@ function buildRouter() {
       if (meta.newTitle) payload.title = meta.newTitle;
       await updateWpPost(session.post_id, payload);
 
+      // meta description は AIOSEO mu-plugin 経由 (未配置なら skip 扱い)。
+      let metaDescApplied = true;
+      if (meta.newMetaDesc) {
+        const r = await updateAioseoDescription(session.post_id, meta.newMetaDesc);
+        if (!r.ok) {
+          metaDescApplied = false;
+          skipped.push({ diff_id: meta.metaDescDiffId, reason: `meta description 適用不可: ${r.reason}` });
+        }
+      }
+
       conn.prepare(
         `UPDATE master_rewrite_session
          SET wp_apply_completed_at=CURRENT_TIMESTAMP, status='completed', completed_at=CURRENT_TIMESTAMP
          WHERE id=?`
       ).run(id);
 
-      const appliedIds = [...plan.planned.map((p) => p.diff_id), ...meta.meta_planned.map((m) => m.diff_id)];
+      const metaIds = meta.meta_planned
+        .filter((m) => metaDescApplied || m.op !== 'update_meta_description')
+        .map((m) => m.diff_id);
+      const appliedIds = [...plan.planned.map((p) => p.diff_id), ...metaIds];
       const applyMark = conn.prepare(`UPDATE master_rewrite_diff SET applied_to_wp=1, applied_at=CURRENT_TIMESTAMP WHERE id=?`);
       for (const did of appliedIds) applyMark.run(did);
 
