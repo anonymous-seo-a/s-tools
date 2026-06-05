@@ -1,12 +1,12 @@
 'use strict';
 
 const express = require('express');
-const cheerio = require('cheerio');
 const { open } = require('../db');
 const { runComplianceCheck } = require('../llm-execution/compliance-runner');
 const { runAnalysis } = require('../llm-execution/analysis-runner');
 const { runDiffGeneration } = require('../llm-execution/diff-runner');
 const { sessionCostUsd } = require('../llm-execution/cost');
+const { planGutenbergApply, applyGutenbergOps } = require('../apply/gutenberg-apply');
 
 // in-memory job ストア (server プロセス再起動で消失、明示再実行で再投入)
 //   key: session_id (number) → compliance job
@@ -102,120 +102,66 @@ async function runGenerationPipeline(job, conn) {
 //   - hallucination 旧 diff (content_before 短すぎ) は事前に排除
 // ─────────────────────────────────────────────────────────────────────
 
-const APPLY_MIN_CONTENT_BEFORE_LEN = 50; // これ未満は LLM hallucination 推定で拒否
-
-async function fetchWpPost(postId) {
+function wpBase() {
   const raw = (process.env.WP_API_BASE_URL || '').replace(/\/$/, '');
   if (!raw) throw new Error('WP_API_BASE_URL not set');
-  const base = raw.endsWith('/wp-json/wp/v2') ? raw : `${raw}/wp-json/wp/v2`;
-  const url = `${base}/posts/${postId}`;
-  const auth = Buffer.from(`${process.env.WP_API_USERNAME}:${process.env.WP_API_APP_PASSWORD}`).toString('base64');
-  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
-  if (!res.ok) throw new Error(`WP fetch ${postId}: HTTP ${res.status}`);
+  return raw.endsWith('/wp-json/wp/v2') ? raw : `${raw}/wp-json/wp/v2`;
+}
+function wpAuthHeader() {
+  return 'Basic ' + Buffer.from(`${process.env.WP_API_USERNAME}:${process.env.WP_API_APP_PASSWORD}`).toString('base64');
+}
+
+// content.raw (Gutenberg block markup) を取得。edit 権限が要る (soico-cvr-system / editor)。
+async function fetchWpPost(postId) {
+  const res = await fetch(`${wpBase()}/posts/${postId}?context=edit`, { headers: { Authorization: wpAuthHeader() } });
+  if (!res.ok) {
+    throw new Error(`WP fetch ${postId}: HTTP ${res.status} (context=edit 権限/認証を確認)`);
+  }
   const p = await res.json();
-  return { title: p.title?.rendered || '', content_rendered: p.content?.rendered || '' };
-}
-
-const HEADINGS = 'h1,h2,h3,h4';
-
-// 差分生成時 (diff-runner) は content.rendered を extractSelfArticle に通し、h*# diff の
-// content_before を section の raw_html_block (= 見出しタグ + 次見出し直前までの兄弟要素を
-// $.html(node) で連結、要素間テキストノードは nextUntil が除外) で上書きしている。
-// apply step は同じ cheerio パイプラインで WP content.rendered を読み、各見出しから
-// raw_html_block を再構築して content_before と完全一致する section だけを置換対象にする。
-// 文字列 substring 照合は不可 ($('body').html() は要素間 \n を含むため raw_html_block と不一致)。
-//
-// 注意: extractSelfArticle は script/style/noscript を *除去してから* section を組むため
-// raw_html_block にはそれらが含まれない。一方 apply は最終的に $('body').html() を WP へ
-// push するので、ここで script/style を除去すると記事本文のインライン script/style が
-// 適用時に永久消失する (YMYL 記事でデータ損失)。よって DOM 上は残し、照合ブロックの
-// 再構築時のみ script/style/noscript を除外して content_before とのパリティを保つ。
-const SKIP_TAGS = new Set(['script', 'style', 'noscript']);
-
-function buildDom(contentRendered) {
-  return cheerio.load(contentRendered || '', { decodeEntities: true });
-}
-
-function reconstructBlock($, $h) {
-  // 置換対象 span は次見出し直前までの全兄弟 (script/style 含む = remove 対象)。
-  const $body = $h.nextUntil(HEADINGS);
-  // 照合用 html は extractSelfArticle と同様 script/style/noscript を除外して連結。
-  const compareNodes = $body.toArray().filter((n) => !SKIP_TAGS.has(n.tagName?.toLowerCase()));
-  const html = $.html($h) + compareNodes.map((n) => $.html(n)).join('');
-  return { html, $body };
-}
-
-// planApply: 現 DOM に対し置換対象を確定。DOM は変更しない (node 参照のみ ops に退避)。
-//   planned[] は JSON 返却用 (plain field のみ)、ops は server side で apply 時に使う。
-function planApply($, diffs) {
-  const planned = [];
-  const skipped = [];
-  const ops = new Map();
-  for (const d of diffs) {
-    if (d.daiki_judgment !== 'approved') {
-      skipped.push({ diff_id: d.id, reason: `not approved (${d.daiki_judgment})` });
-      continue;
-    }
-    const before = (d.content_before || '').trim();
-    const after = d.daiki_edit_content || d.content_after || '';
-    if (before.length < APPLY_MIN_CONTENT_BEFORE_LEN) {
-      skipped.push({ diff_id: d.id, reason: `content_before too short (${before.length}c, hallucination?)` });
-      continue;
-    }
-    if (!after) {
-      skipped.push({ diff_id: d.id, reason: 'content_after empty' });
-      continue;
-    }
-    if (!/^h[1-4]#.+/.test((d.target_section || '').trim())) {
-      // meta:* / p#… / outline:* は本文 section 置換の対象外 (別経路で解決)。
-      skipped.push({ diff_id: d.id, reason: `target_section not a body heading (${d.target_section})` });
-      continue;
-    }
-    // 現 HTML の見出しから raw_html_block を再構築し、content_before と完全一致する section を探す。
-    let matched = null;
-    $(HEADINGS).each((_, el) => {
-      if (matched) return;
-      const $h = $(el);
-      const { html, $body } = reconstructBlock($, $h);
-      if (html === before) matched = { $h, $body };
-    });
-    if (!matched) {
-      skipped.push({ diff_id: d.id, reason: 'section not found / drifted (content_before mismatch)' });
-      continue;
-    }
-    planned.push({ diff_id: d.id, target_section: d.target_section, before_len: before.length, after_len: after.length });
-    ops.set(d.id, { $h: matched.$h, $body: matched.$body, after });
+  const content_raw = p.content?.raw;
+  if (content_raw == null) {
+    throw new Error(`WP post ${postId}: content.raw 取得不可 (edit 権限不足の可能性)`);
   }
-  return { planned, skipped, ops };
+  return { title_raw: p.title?.raw ?? p.title?.rendered ?? '', content_raw };
 }
 
-// applyOps: planApply で確定した node を置換。$body 兄弟は plan 時点で捕捉済のため、
-//   他 section の置換による兄弟構成変化の影響を受けない。返り値は更新後の body inner。
-function applyOps($, planned, ops) {
-  for (const p of planned) {
-    const op = ops.get(p.diff_id);
-    if (!op) throw new Error(`apply: missing op for diff #${p.diff_id}`);
-    op.$body.remove();
-    op.$h.replaceWith(op.after);
-  }
-  return $('body').html() || '';
-}
-
-async function updateWpPost(postId, contentHtml) {
-  const raw = (process.env.WP_API_BASE_URL || '').replace(/\/$/, '');
-  const base = raw.endsWith('/wp-json/wp/v2') ? raw : `${raw}/wp-json/wp/v2`;
-  const url = `${base}/posts/${postId}`;
-  const auth = Buffer.from(`${process.env.WP_API_USERNAME}:${process.env.WP_API_APP_PASSWORD}`).toString('base64');
-  const res = await fetch(url, {
-    method: 'POST', // WP REST は POST で update (PUT も可)
-    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: contentHtml }),
+// payload: { content?, title? } を WP に PUT。
+async function updateWpPost(postId, payload) {
+  const res = await fetch(`${wpBase()}/posts/${postId}`, {
+    method: 'POST', // WP REST は POST で update
+    headers: { Authorization: wpAuthHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const t = await res.text();
     throw new Error(`WP update ${postId}: HTTP ${res.status} ${t.slice(0, 200)}`);
   }
   return res.json();
+}
+
+// title diff の content_after からタイトル文字列を取り出す (<title>…</title> or 素テキスト)。
+function extractTitleText(after) {
+  const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(after || '');
+  return (m ? m[1] : (after || '')).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// 本文 diff (insert/rewrite) と別に meta diff (title/description) を仕分ける。
+function planMetaDiffs(diffs) {
+  const meta_planned = [];
+  const meta_skipped = [];
+  let newTitle = null;
+  for (const d of diffs) {
+    if (d.daiki_judgment !== 'approved') continue;
+    if (d.change_type === 'update_title') {
+      const t = extractTitleText(d.daiki_edit_content || d.content_after || '');
+      if (t) { newTitle = t; meta_planned.push({ diff_id: d.id, op: 'update_title', value: t }); }
+      else meta_skipped.push({ diff_id: d.id, reason: 'title 抽出不可' });
+    } else if (d.change_type === 'update_meta_description') {
+      // Yoast 管理の meta description は標準 REST で書けないため当面手動。
+      meta_skipped.push({ diff_id: d.id, reason: 'meta description は Yoast 管理 (REST 自動更新 未対応) → 手動' });
+    }
+  }
+  return { meta_planned, meta_skipped, newTitle };
 }
 
 const VALID_SESSION_STATUSES = new Set([
@@ -477,7 +423,9 @@ function buildRouter() {
 
   // POST /api/rewrite/judgment/sessions/:id/apply
   //   body: { dry_run?: boolean }
-  //   approved diff を 1 件ずつ WP content に適用 (string match)、全件成功で PUT。
+  //   approved diff を content.raw (Gutenberg) に適用: insert は再利用/CTA を保持して挿入、
+  //   rewrite は保護ブロックを含まない section のみ置換 (含めば skip)、title は別 PUT。
+  //   全文を content.raw として PUT (ブロック構造保持)。snapshot で rollback 可能。
   //   dry_run=true なら計画 (planned / skipped) を返すだけで WP は触らない。
   router.post('/sessions/:id/apply', async (req, res) => {
     try {
@@ -496,34 +444,33 @@ function buildRouter() {
          FROM master_rewrite_diff WHERE session_id=? ORDER BY diff_order`
       ).all(id);
       const wp = await fetchWpPost(session.post_id);
-      const $ = buildDom(wp.content_rendered);
-      const plan = planApply($, diffs);
+      const plan = planGutenbergApply(wp.content_raw, diffs);     // 本文 (insert/rewrite)
+      const meta = planMetaDiffs(diffs);                          // title / meta description
+      const planned = [...plan.planned, ...meta.meta_planned];
+      const skipped = [...plan.skipped, ...meta.meta_skipped];
 
-      if (plan.planned.length === 0) {
+      if (planned.length === 0) {
         return res.json({
           dry_run: dryRun, post_id: session.post_id, applied: false,
-          planned: plan.planned, skipped: plan.skipped,
-          reason: 'no diffs to apply',
+          planned, skipped, reason: 'no diffs to apply',
         });
       }
 
       if (dryRun) {
-        return res.json({
-          dry_run: true, post_id: session.post_id, applied: false,
-          planned: plan.planned, skipped: plan.skipped,
-        });
+        return res.json({ dry_run: true, post_id: session.post_id, applied: false, planned, skipped });
       }
 
-      // 実適用。snapshot は WP から取得した raw content.rendered をそのまま保存する。
-      // (cheerio 再直列化後の body inner ではなく原本を保存 → rollback で完全復元)
+      // 実適用。snapshot は raw content + title を JSON で保存 (rollback で完全復元)。
+      const applied = applyGutenbergOps(wp.content_raw, plan.ops);
       conn.prepare(
         `UPDATE master_rewrite_session
          SET wp_snapshot_before_apply=?, wp_apply_started_at=CURRENT_TIMESTAMP
          WHERE id=?`
-      ).run(wp.content_rendered || '', id);
+      ).run(JSON.stringify({ content_raw: wp.content_raw, title_raw: wp.title_raw }), id);
 
-      const newHtml = applyOps($, plan.planned, plan.ops);
-      await updateWpPost(session.post_id, newHtml);
+      const payload = { content: applied.raw };
+      if (meta.newTitle) payload.title = meta.newTitle;
+      await updateWpPost(session.post_id, payload);
 
       conn.prepare(
         `UPDATE master_rewrite_session
@@ -531,13 +478,14 @@ function buildRouter() {
          WHERE id=?`
       ).run(id);
 
+      const appliedIds = [...plan.planned.map((p) => p.diff_id), ...meta.meta_planned.map((m) => m.diff_id)];
       const applyMark = conn.prepare(`UPDATE master_rewrite_diff SET applied_to_wp=1, applied_at=CURRENT_TIMESTAMP WHERE id=?`);
-      for (const p of plan.planned) applyMark.run(p.diff_id);
+      for (const did of appliedIds) applyMark.run(did);
 
       return res.json({
         dry_run: false, post_id: session.post_id, applied: true,
-        planned: plan.planned, skipped: plan.skipped,
-        applied_count: plan.planned.length,
+        planned, skipped, applied_count: appliedIds.length,
+        conflicts: applied.conflicts,
       });
     } catch (e) {
       console.error('[POST /judgment/sessions/:id/apply]', e);
@@ -560,7 +508,17 @@ function buildRouter() {
       if (!session.wp_apply_completed_at) return res.status(409).json({ error: 'not applied yet' });
       if (!session.wp_snapshot_before_apply) return res.status(409).json({ error: 'no snapshot saved' });
 
-      await updateWpPost(session.post_id, session.wp_snapshot_before_apply);
+      // snapshot は {content_raw, title_raw} JSON (新方式)。旧データは素の content 文字列。
+      const snap = session.wp_snapshot_before_apply;
+      const payload = {};
+      try {
+        const o = JSON.parse(snap);
+        if (o && typeof o === 'object' && 'content_raw' in o) {
+          payload.content = o.content_raw;
+          if (o.title_raw != null) payload.title = o.title_raw;
+        } else { payload.content = snap; }
+      } catch { payload.content = snap; }
+      await updateWpPost(session.post_id, payload);
 
       conn.prepare(
         `UPDATE master_rewrite_session
@@ -681,6 +639,4 @@ module.exports = {
   fetchSessions,
   fetchSessionDetail,
   updateDiffJudgment,
-  // test 用に apply engine を公開 (HTTP 経路を介さず純粋ロジックを検証可能にする)
-  _applyEngine: { buildDom, planApply, applyOps },
 };
