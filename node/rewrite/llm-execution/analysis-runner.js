@@ -24,6 +24,7 @@ const { opus } = require('../../shared/llm-adapters/anthropic-adapter');
 const { buildCaseCInputBundle } = require('../embedding-poc/case-c-bundle');
 const { SYSTEM_PROMPT, buildUserPrompt } = require('./case-c-prompt');
 const { extractSelfArticle } = require('../../shared/wp-structured');
+const { genreConfig } = require('./genre-config');
 
 const REQUIRED_FIELDS = [
   'structural_analysis',
@@ -137,7 +138,8 @@ function determineStatus(highRiskCategories) {
  * @param {number} args.query_fanout_id
  * @returns {Promise<{ analysis_output, high_risk_categories, status, usage, bundle }>}
  */
-async function runAnalysis({ session_id, post_id, query_fanout_id }) {
+async function runAnalysis({ session_id, post_id, query_fanout_id, genre = 'cardloan' }) {
+  const gcfg = genreConfig(genre);
   if (!Number.isInteger(session_id)) throw new Error('runAnalysis: session_id required');
   if (!Number.isInteger(post_id)) throw new Error('runAnalysis: post_id required');
   if (!Number.isInteger(query_fanout_id)) throw new Error('runAnalysis: query_fanout_id required');
@@ -155,7 +157,7 @@ async function runAnalysis({ session_id, post_id, query_fanout_id }) {
   // 3. 関連データ取得
   const hcuSummary = loadHcuSummary(conn, post_id);
   const similarArticles = loadSimilarArticles(conn, post_id);
-  const masterRules = loadMasterRules(conn, 'cardloan');
+  const masterRules = loadMasterRules(conn, gcfg.ruleCategory);
 
   // 4. self 記事 WP REST
   const wp = await fetchWpContent(post_id);
@@ -171,6 +173,7 @@ async function runAnalysis({ session_id, post_id, query_fanout_id }) {
     hcu_summary: hcuSummary,
     similar_articles: similarArticles,
     master_rules: masterRules,
+    genre: gcfg,
   });
 
   // 6. Opus 4.7 呼出

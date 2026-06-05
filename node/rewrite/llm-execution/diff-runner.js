@@ -23,6 +23,7 @@ const cheerio = require('cheerio');
 const db = require('../db');
 const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
 const { buildRunStructuredView, makeRunResolver } = require('../apply/gutenberg-apply');
+const { genreConfig } = require('./genre-config');
 const {
   SYSTEM_PROMPT,
   buildDiffUserPrompt,
@@ -128,7 +129,8 @@ function validateDiff(d, idx) {
  * @param {number} args.session_id
  * @returns {Promise<{ session_id, diffs_inserted, errors, usage, status }>}
  */
-async function runDiffGeneration({ session_id }) {
+async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
+  const gcfg = genreConfig(genre);
   if (!Number.isInteger(session_id)) throw new Error('runDiffGeneration: session_id required');
   const conn = db.open();
 
@@ -151,8 +153,8 @@ async function runDiffGeneration({ session_id }) {
   const masterRules = conn.prepare(
     `SELECT rule_type, ng_text, correct_text, condition, legal_basis
      FROM master_rules
-     WHERE category='cardloan' AND status='verified'`
-  ).all();
+     WHERE category=? AND status='verified'`
+  ).all(gcfg.ruleCategory);
 
   const wp = await fetchWpContent(session.post_id);
   const articleView = buildRunStructuredView(wp.content_raw);
@@ -166,6 +168,7 @@ async function runDiffGeneration({ session_id }) {
     article_view: articleView,
     bundle,
     master_rules: masterRules,
+    genre: gcfg,
   });
 
   const llmRes = await sonnet({

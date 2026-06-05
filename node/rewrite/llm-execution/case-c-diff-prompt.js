@@ -19,6 +19,8 @@
  *   [21] LLM 出力構造化保証: JSON 出力指示 + フォーマット例示
  */
 
+const { renderGenreConstraints } = require('./genre-config');
+
 const PROTECTED_CLASS_PATTERNS = ['soico-cta-*', 'box-###', 'ez-toc-*'];
 
 const CHANGE_TYPES = [
@@ -55,7 +57,7 @@ const RISK_FLAGS = [
 const MAX_DIFFS_TOTAL = 15;
 const MAX_DIFFS_PER_POLICY = 3;
 
-const SYSTEM_PROMPT = `あなたは SEO リライト差分生成者 (YMYL 領域: 消費者金融カードローン)。
+const SYSTEM_PROMPT = `あなたは SEO リライト差分生成者 (YMYL 領域)。対象ジャンルと YMYL 制約は user プロンプトの「対象ジャンル / YMYL 制約」に従う。
 工程6'-A の analysis_output と元記事を入力に、master_rewrite_diff JSON 配列を出力する。
 出力は JSON のみ、説明文・コードフェンス一切不要。
 
@@ -119,12 +121,9 @@ risk_flag     : null または ${RISK_FLAGS.join(' / ')}
 - meta 系: 'meta:title' / 'meta:description'
 - rewrite_run は上記見出し + run_index で run を一意特定する
 
-# YMYL 制約 (必須遵守、違反 diff は生成禁止)
-以下の表現は content_after に絶対に含めない:
-- 「無審査」「審査が甘い」「審査なし」「無条件」
-- 「ブラック OK」「ブラックでも借りれる」「破産歴 OK」
-- 「必ず貸します」「100% 融資」「絶対借りれる」「誰でも借りられる」
-- 安易な借入を強調する表現、過度な借入意欲喚起
+# YMYL 制約
+対象ジャンル固有の禁止表現は user プロンプトの「対象ジャンル / YMYL 制約」に列挙する。
+そこに挙がる表現を content_after に絶対に含めない (違反 diff は生成禁止)。
 
 # risk_flag 自動判定 (LLM 自己申告)
 - title_change       : change_type='update_title' または title 文言変更
@@ -171,6 +170,7 @@ function buildDiffUserPrompt({
   article_view,
   bundle,
   master_rules,
+  genre,
 }) {
   const protectedRegions = PROTECTED_CLASS_PATTERNS.map((p) => `  - ${p}`).join('\n');
   const sections = [];
@@ -179,6 +179,8 @@ function buildDiffUserPrompt({
 post_id: ${post_id}
 title: ${title}
 target_query (Q[i]): ${target_query}`);
+
+  if (genre) sections.push(renderGenreConstraints(genre));
 
   sections.push(`# analysis_output (工程6'-A Opus 4.7 出力)
 ${JSON.stringify(analysis_output, null, 2)}`);

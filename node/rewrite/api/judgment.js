@@ -18,7 +18,7 @@ let activeGenerationJobId = null;
 // β-1A: smoke-e2e.js の一気通貫フローを単独関数化。
 // embedding-poc が未完成領域なので mock gap データを INSERT する (現状の Phase 2 と同質)。
 async function runGenerationPipeline(job, conn) {
-  const { post_id, query_fanout_id, enableCompliance } = job.options;
+  const { post_id, query_fanout_id, enableCompliance, genre = 'cardloan' } = job.options;
 
   // 1. session INSERT
   job.step = 'session_init';
@@ -52,7 +52,7 @@ async function runGenerationPipeline(job, conn) {
 
   // 3. runAnalysis (Opus 4.7)
   job.step = 'analyzing';
-  const analysisRes = await runAnalysis({ session_id, post_id, query_fanout_id });
+  const analysisRes = await runAnalysis({ session_id, post_id, query_fanout_id, genre });
   job.analysis = {
     usage: analysisRes.usage,
     status: analysisRes.status,
@@ -68,7 +68,7 @@ async function runGenerationPipeline(job, conn) {
 
   // 5. runDiffGeneration (Sonnet 4.6)
   job.step = 'generating';
-  const diffRes = await runDiffGeneration({ session_id });
+  const diffRes = await runDiffGeneration({ session_id, genre });
   job.diff = {
     usage: diffRes.usage,
     diffs_inserted: diffRes.diffs_inserted,
@@ -340,13 +340,14 @@ function buildRouter() {
         return res.status(400).json({ error: 'query_fanout_id (positive integer) required' });
       }
       const enableCompliance = body.enableCompliance !== false;
+      const genre = typeof body.genre === 'string' ? body.genre : 'cardloan';
 
       const job_id = `gen-${Date.now()}`;
       const job = {
         job_id,
         status: 'running',
         step: 'init',
-        options: { post_id, query_fanout_id, enableCompliance },
+        options: { post_id, query_fanout_id, enableCompliance, genre },
         session_id: null,
         analysis: null,
         diff: null,

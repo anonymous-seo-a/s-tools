@@ -16,9 +16,11 @@
  *   [21] LLM 出力構造化保証: JSON 出力指示 + フォーマット例示
  */
 
+const { renderGenreConstraints } = require('./genre-config');
+
 const PROTECTED_CLASS_PATTERNS = ['soico-cta-*', 'box-###', 'ez-toc-*'];
 
-const SYSTEM_PROMPT = `あなたは SEO リライト分析者 (YMYL 領域: 消費者金融カードローン)。
+const SYSTEM_PROMPT = `あなたは SEO リライト分析者 (YMYL 領域)。対象ジャンルと YMYL 制約は user プロンプトの「対象ジャンル / YMYL 制約」に従う。
 入力された記事と競合分析データから、リライト方針を JSON で出力する。
 出力は JSON のみ、説明文・コードフェンス一切不要。
 
@@ -55,11 +57,8 @@ const SYSTEM_PROMPT = `あなたは SEO リライト分析者 (YMYL 領域: 消�
 4. rate_update             金利・限度額・料率の更新
 
 # YMYL 制約 (必須遵守)
-以下の表現は方針として絶対に提案しない:
-- 「無審査」「審査が甘い」「審査なし」「無条件」
-- 「ブラック OK」「ブラックでも借りれる」「破産歴 OK」
-- 「必ず貸します」「100% 融資」「絶対借りれる」「誰でも借りられる」
-- 安易な借入を強調する表現、過度な借入意欲喚起
+対象ジャンル固有の禁止表現は user プロンプトの「対象ジャンル / YMYL 制約」に列挙する。
+そこに挙がる表現は方針として絶対に提案しない。
 
 # confidence 自己評価
 - high:   bundle 情報が豊富、明確な改善方針が立つ
@@ -96,6 +95,7 @@ function buildUserPrompt({
   hcu_summary,
   similar_articles,
   master_rules,
+  genre,
 }) {
   const protectedRegions = PROTECTED_CLASS_PATTERNS.map((p) => `  - ${p}`).join('\n');
 
@@ -104,6 +104,8 @@ function buildUserPrompt({
 post_id: ${post_id}
 title: ${title}
 target_query (Q[i]): ${target_query}`);
+
+  if (genre) sections.push(renderGenreConstraints(genre));
 
   sections.push(`# 自記事 plain_text (冒頭 5000 字)
 ${(self_plain_text_excerpt || '').slice(0, 5000)}`);
