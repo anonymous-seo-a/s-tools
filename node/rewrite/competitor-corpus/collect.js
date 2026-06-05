@@ -21,7 +21,27 @@ const { searchSerp } = require('../../shared/serpapi-adapter');
 
 const FACT_SET_PENDING = JSON.stringify({ _pending: true });
 
-async function collectCompetitorCorpus(query_fanout_id, { topN = 3 } = {}) {
+// 競合として扱わないドメイン (企業公式・政府・自サイト)。メディア/比較サイトのみを競合にする。
+// suffix 一致 (host === s または host が .s で終わる)。Daiki が随時追記する想定。
+const EXCLUDE_DOMAIN_SUFFIXES = [
+  'soico.jp',                                   // 自サイト
+  'go.jp', 'fsa.go.jp', 'nta.go.jp',            // 政府 (一次情報源=出典であり競合ではない)
+  // 証券 企業公式 (メディアではない)
+  'rakuten-sec.co.jp', 'sbisec.co.jp', 'sbineotrade.jp', 'daiwa.jp', 'monex.co.jp',
+  'matsui.co.jp', 'nomura.co.jp', 'smbcnikko.co.jp', 'tokaitokyo.co.jp',
+  'okasan-online.co.jp', 'gmo-click.com', 'click-sec.com', 'auone-kabu.jp',
+  'rakuten.co.jp', 'sbigroup.co.jp',
+  // カードローン 企業公式
+  'acom.co.jp', 'promise.co.jp', 'aiful.co.jp', 'mobit.ne.jp', 'smbc-cf.com',
+];
+
+function isExcludedDomain(url, extra = []) {
+  let host;
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return true; }
+  return [...EXCLUDE_DOMAIN_SUFFIXES, ...extra].some((s) => host === s || host.endsWith('.' + s));
+}
+
+async function collectCompetitorCorpus(query_fanout_id, { topN = 3, excludeDomains = [], mediaOnly = true } = {}) {
   const conn = db.open();
   const parent = conn
     .prepare('SELECT id, sub_query FROM master_query_fanout WHERE id=?')
@@ -31,7 +51,11 @@ async function collectCompetitorCorpus(query_fanout_id, { topN = 3 } = {}) {
   }
 
   const serp = await searchSerp(parent.sub_query);
-  const organic = serp.organic.slice(0, topN);
+  // mediaOnly: 企業公式/政府を除外してメディア/比較サイトのみを上位 topN 競合に。
+  const pool = (serp.organic || []).filter((r) => r.link && typeof r.position === 'number');
+  const filtered = mediaOnly ? pool.filter((r) => !isExcludedDomain(r.link, excludeDomains)) : pool;
+  const excluded = pool.filter((r) => mediaOnly && isExcludedDomain(r.link, excludeDomains)).map((r) => r.link);
+  const organic = filtered.slice(0, topN);
   const competitor_url_count = organic.length;
 
   const serp_features = JSON.stringify({
@@ -75,9 +99,10 @@ async function collectCompetitorCorpus(query_fanout_id, { topN = 3 } = {}) {
     target_query: parent.sub_query,
     organic_count: organic.length,
     inserted_count: inserted.length,
+    excluded_official: excluded,
     serp_features: JSON.parse(serp_features),
     inserted,
   };
 }
 
-module.exports = { collectCompetitorCorpus };
+module.exports = { collectCompetitorCorpus, isExcludedDomain, EXCLUDE_DOMAIN_SUFFIXES };
