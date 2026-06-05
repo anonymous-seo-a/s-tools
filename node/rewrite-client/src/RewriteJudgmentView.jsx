@@ -615,14 +615,45 @@ function GenerationPanel({ showToast, onSessionCreated }) {
   const [enableCompliance, setEnableCompliance] = useState(true);
   const [genre, setGenre] = useState('cardloan');
   const [job, setJob] = useState(null);
+  const [candidates, setCandidates] = useState([]);
+  const [candLoading, setCandLoading] = useState(false);
+  const [preparingId, setPreparingId] = useState(null);
+
+  const refreshFanouts = async (selectId) => {
+    const r = await api.getQueryFanouts();
+    setQueryFanouts(r.items || []);
+    if (selectId != null) setQueryFanoutId(String(selectId));
+    else if (r.items && r.items.length > 0 && !queryFanoutId) setQueryFanoutId(String(r.items[0].id));
+  };
 
   useEffect(() => {
-    api.getQueryFanouts().then((r) => {
-      setQueryFanouts(r.items || []);
-      if (r.items && r.items.length > 0) setQueryFanoutId(String(r.items[0].id));
-    }).catch(() => {});
+    refreshFanouts().catch(() => {});
     api.getGenerationJob().then(setJob).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 自動ピック候補をカテゴリ変更時にロード (順位モニタリング由来)
+  useEffect(() => {
+    setCandLoading(true);
+    api.getRewriteCandidates(genre, 20)
+      .then((r) => setCandidates(r.items || []))
+      .catch(() => setCandidates([]))
+      .finally(() => setCandLoading(false));
+  }, [genre]);
+
+  // 候補を選んで生成準備 (top query → query_fanout 自動生成 → フォームにセット)
+  const pickCandidate = async (c) => {
+    setPreparingId(c.post_id);
+    try {
+      const r = await api.prepareCandidate(c.post_id, genre);
+      setPostId(String(r.post_id));
+      await refreshFanouts(r.query_fanout_id);
+      showToast(`候補セット: post ${r.post_id} / 「${r.target_query}」`);
+    } catch (e) {
+      showToast(`準備失敗: ${e.message}`, 'error');
+    }
+    setPreparingId(null);
+  };
 
   // polling
   useEffect(() => {
@@ -678,6 +709,9 @@ function GenerationPanel({ showToast, onSessionCreated }) {
         <select value={genre} onChange={(e) => setGenre(e.target.value)} disabled={running}>
           <option value="cardloan">カードローン</option>
           <option value="securities">証券</option>
+          <option value="cryptocurrency">仮想通貨</option>
+          <option value="fx">FX</option>
+          <option value="realestate">不動産</option>
         </select>
         <label style={{ fontSize: 12, color: '#666' }}>post_id</label>
         <input
@@ -701,6 +735,28 @@ function GenerationPanel({ showToast, onSessionCreated }) {
         <button className="btn-apply btn-small" onClick={handleStart} disabled={running}>
           {running ? '生成中...' : '生成'}
         </button>
+      </div>
+
+      {/* 自動ピック候補 (順位モニタリング: 平均順位11-20 = 伸びしろ) */}
+      <div style={{ padding: '4px 12px 12px' }}>
+        <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>
+          リライト候補 (順位11-20 / 直近28日 impression 降順){candLoading ? ' — 読込中...' : ` — ${candidates.length}件`}
+        </div>
+        {candidates.length > 0 && (
+          <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid #fbc02d', borderRadius: 6, background: 'white' }}>
+            {candidates.map((c) => (
+              <div key={c.post_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderBottom: '1px solid #f5f5f5', fontSize: 12 }}>
+                <span style={{ color: '#888', width: 56 }}>#{c.post_id}</span>
+                <span style={{ width: 70, color: c.avg_rank <= 13 ? '#e65100' : '#888' }}>順位 {c.avg_rank}</span>
+                <span style={{ width: 90, color: '#555' }}>impr {c.impressions}</span>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.title}>{c.title || c.url}</span>
+                <button className="btn-secondary btn-small" disabled={running || preparingId === c.post_id} onClick={() => pickCandidate(c)}>
+                  {preparingId === c.post_id ? '準備中...' : 'この記事を生成'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {job && (
         <div style={{ padding: '10px 12px', background: 'white', borderTop: '1px solid #fbc02d', fontSize: 12 }}>

@@ -311,6 +311,73 @@ function fetchSessionEvidence(id) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────
+// リライト記事 自動ピック (順位モニタリング → 候補)
+//   直近28日で平均順位 11-20 (ページ2=伸びしろ) の記事を impression 降順で候補化。
+// ─────────────────────────────────────────────────────────────
+const CANDIDATE_MIN_IMPR = 500;
+
+async function fetchWpTitles(ids) {
+  if (!ids.length) return {};
+  try {
+    const res = await fetch(`${wpBase()}/posts?include=${ids.join(',')}&per_page=${ids.length}&_fields=id,title`, { headers: { Authorization: wpAuthHeader() } });
+    if (!res.ok) return {};
+    const arr = await res.json();
+    const m = {};
+    for (const p of arr) m[p.id] = p.title?.rendered || '';
+    return m;
+  } catch { return {}; }
+}
+
+async function fetchRewriteCandidates(genre, limit) {
+  const category = genre || 'cardloan';
+  const mdb = require('../../monitor-db');
+  const db = mdb.getDB();
+  // alias は daily_metrics の列名 (impressions/rank/ctr) と衝突させない (HAVING で集計が誤評価されるため)。
+  const rows = db.prepare(`
+    SELECT m.post_id, a.url,
+           AVG(m.rank) AS avgRank, SUM(m.impressions) AS sumImpr,
+           SUM(m.gsc_click) AS sumClick, AVG(m.ctr) AS avgCtr
+    FROM daily_metrics m JOIN articles a ON a.post_id = m.post_id
+    WHERE a.category = ?
+      AND m.date >= date((SELECT MAX(date) FROM daily_metrics), '-28 day')
+    GROUP BY m.post_id
+    HAVING avgRank BETWEEN 11 AND 20 AND sumImpr >= ?
+    ORDER BY sumImpr DESC
+    LIMIT ?
+  `).all(category, CANDIDATE_MIN_IMPR, limit);
+  const titles = await fetchWpTitles(rows.map((r) => r.post_id));
+  return rows.map((r) => ({
+    post_id: r.post_id,
+    url: r.url,
+    title: titles[r.post_id] || '',
+    avg_rank: Number(r.avgRank.toFixed(1)),
+    impressions: r.sumImpr,
+    clicks: r.sumClick,
+    ctr: Number(((r.avgCtr || 0) * 100).toFixed(2)),
+  }));
+}
+
+// 候補記事の top query を取得し query_fanout を自動生成 (生成の target_query にする)。
+async function prepareCandidate(postId, genre) {
+  const mdb = require('../../monitor-db');
+  const mc = require('../../monitor-collectors');
+  const mconn = mdb.getDB();
+  const art = mconn.prepare('SELECT url FROM articles WHERE post_id=?').get(postId);
+  if (!art) throw new Error(`post ${postId} が monitor.db に無い`);
+  const latest = mconn.prepare('SELECT MAX(date) d FROM daily_metrics').get().d;
+  const start = mconn.prepare("SELECT date(?, '-28 day') d").get(latest).d;
+  const top = await mc.fetchTopQueryForPage(art.url, { startDate: start, endDate: latest, topN: 1 });
+  const targetQuery = top[0]?.query;
+  if (!targetQuery) throw new Error('top query を取得できなかった');
+  const conn = open();
+  const info = conn.prepare(
+    `INSERT INTO master_query_fanout (seed_query, sub_query, layer, generation_method, priority, notes)
+     VALUES (?, ?, 1, 'auto-pick', 1, ?)`
+  ).run(targetQuery, targetQuery, `auto-pick post ${postId} (${genre || 'cardloan'})`);
+  return { post_id: postId, query_fanout_id: info.lastInsertRowid, target_query: targetQuery };
+}
+
 function updateDiffJudgment(id, { judgment, reject_reason, reject_note, edit_content }) {
   const conn = open();
   const existing = conn.prepare(`SELECT * FROM master_rewrite_diff WHERE id = ?`).get(id);
@@ -379,6 +446,36 @@ function buildRouter() {
       return res.json(detail);
     } catch (e) {
       console.error('[GET /judgment/sessions/:id]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/rewrite/judgment/rewrite-candidates?genre=securities&limit=20
+  //   順位モニタリングから「平均順位11-20 (伸びしろ)」の記事を impression 降順で候補化。
+  router.get('/rewrite-candidates', async (req, res) => {
+    try {
+      let genre = req.query.genre;
+      if (!genre || genre === 'all') genre = 'cardloan';
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+      const items = await fetchRewriteCandidates(genre, limit);
+      return res.json({ genre, count: items.length, items });
+    } catch (e) {
+      console.error('[GET /judgment/rewrite-candidates]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/rewrite/judgment/rewrite-candidates/:postId/prepare  body:{genre}
+  //   候補の top query から query_fanout を生成し、生成に使う {post_id, query_fanout_id, target_query} を返す。
+  router.post('/rewrite-candidates/:postId/prepare', async (req, res) => {
+    try {
+      const postId = Number(req.params.postId);
+      if (!Number.isInteger(postId) || postId <= 0) return res.status(400).json({ error: 'invalid postId' });
+      const genre = (req.body && req.body.genre) || 'cardloan';
+      const r = await prepareCandidate(postId, genre);
+      return res.json(r);
+    } catch (e) {
+      console.error('[POST /judgment/rewrite-candidates/:postId/prepare]', e);
       return res.status(500).json({ error: e.message });
     }
   });

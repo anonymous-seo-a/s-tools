@@ -141,6 +141,10 @@ export const api = {
     request(`/api/rewrite/judgment/sessions/${id}`),
   getSessionEvidence: (id) =>
     request(`/api/rewrite/judgment/sessions/${id}/evidence`),
+  getRewriteCandidates: (genre, limit = 20) =>
+    request(`/api/rewrite/judgment/rewrite-candidates?genre=${encodeURIComponent(genre || 'cardloan')}&limit=${limit}`),
+  prepareCandidate: (postId, genre) =>
+    request(`/api/rewrite/judgment/rewrite-candidates/${postId}/prepare`, { method: 'POST', body: JSON.stringify({ genre }) }),
   updateDiffJudgment: (id, body) =>
     request(`/api/rewrite/judgment/diffs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 

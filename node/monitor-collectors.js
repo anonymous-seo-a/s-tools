@@ -396,11 +396,36 @@ async function fetchWpContent(post_id) {
   };
 }
 
+// 指定ページ単体の top query (クリック→表示回数 降順) を返す。リライト対象の target_query 用。
+// GSC は末尾スラッシュ無し URL で保持することがあるため、スラッシュ有無の両方を試す。
+async function fetchTopQueryForPage(pageUrl, { startDate, endDate, topN = 5 } = {}) {
+  const auth = authClient();
+  const sc = google.searchconsole({ version: 'v1', auth });
+  const variants = [pageUrl, pageUrl.endsWith('/') ? pageUrl.replace(/\/$/, '') : `${pageUrl}/`];
+  for (const url of variants) {
+    const res = await sc.searchanalytics.query({
+      siteUrl: GSC_SITE_URL,
+      requestBody: {
+        startDate, endDate,
+        dimensions: ['query'],
+        dimensionFilterGroups: [{ filters: [{ dimension: 'page', expression: url }] }],
+        rowLimit: topN,
+      },
+    });
+    const rows = res.data.rows || [];
+    if (rows.length) {
+      return rows.map((r) => ({ query: r.keys[0], clicks: r.clicks, impressions: r.impressions, position: r.position }));
+    }
+  }
+  return [];
+}
+
 module.exports = {
   parseUrl,
   extractPartnerFromLinkUrl,
   fetchGscDaily,
   fetchGscTopKwByPage,
+  fetchTopQueryForPage,
   fetchGa4PageViews,
   fetchGa4AffiliateClicks,
   fetchGa4AffiliateClicksByPartner,
