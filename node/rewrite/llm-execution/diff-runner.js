@@ -25,6 +25,7 @@ const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
 const { buildRunStructuredView, makeRunResolver } = require('../apply/gutenberg-apply');
 const { genreConfig } = require('./genre-config');
 const { classifyDomain } = require('../competitor-corpus/collect');
+const { buildLearningNotes } = require('./learning');
 const {
   SYSTEM_PROMPT,
   buildDiffUserPrompt,
@@ -179,6 +180,7 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
     master_rules: masterRules,
     genre: gcfg,
     citation_sources: citationSources,
+    learning_notes: buildLearningNotes(gcfg.key),  // C 学習ループ: 過去判定の反映
   });
 
   const llmRes = await sonnet({

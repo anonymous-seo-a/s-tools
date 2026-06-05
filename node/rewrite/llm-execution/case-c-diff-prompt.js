@@ -20,6 +20,7 @@
  */
 
 const { renderGenreConstraints } = require('./genre-config');
+const { renderLearningNotes } = require('./learning');
 
 const PROTECTED_CLASS_PATTERNS = ['soico-cta-*', 'box-###', 'ez-toc-*'];
 
@@ -190,6 +191,7 @@ function buildDiffUserPrompt({
   master_rules,
   genre,
   citation_sources,
+  learning_notes,
 }) {
   const protectedRegions = PROTECTED_CLASS_PATTERNS.map((p) => `  - ${p}`).join('\n');
   const sections = [];
@@ -200,6 +202,8 @@ title: ${title}
 target_query (Q[i]): ${target_query}`);
 
   if (genre) sections.push(renderGenreConstraints(genre));
+  const learnText = renderLearningNotes(learning_notes);
+  if (learnText) sections.push(learnText);
 
   sections.push(`# analysis_output (工程6'-A Opus 4.7 出力)
 ${JSON.stringify(analysis_output, null, 2)}`);
