@@ -354,6 +354,10 @@ function EvidencePanel({ sessionId }) {
               <EvidenceSection title={`競合コーパス (${ev.competitors?.length || 0}サイト)`}>
                 {(ev.competitors || []).map((c, i) => (
                   <li key={i} style={{ marginBottom: 6 }}>
+                    <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, marginRight: 6, color: 'white',
+                      background: c.site_type === 'gov' ? '#00695c' : c.site_type === 'official' ? '#9e9e9e' : '#1565c0' }}>
+                      {c.site_type === 'gov' ? '政府/出典' : c.site_type === 'official' ? '企業公式' : 'メディア'}
+                    </span>
                     <a href={c.competitor_url} target="_blank" rel="noreferrer">#{c.rank_position} {c.competitor_url}</a>
                     <div style={{ color: '#666' }}>エンティティ: {c.layer1.join('、') || '—'}</div>
                     <div style={{ color: '#666' }}>事実: {c.layer2.slice(0, 8).join(' / ') || '—'}{c.layer2.length > 8 ? ` …他${c.layer2.length - 8}件` : ''}</div>

@@ -7,6 +7,7 @@ const { runAnalysis } = require('../llm-execution/analysis-runner');
 const { runDiffGeneration } = require('../llm-execution/diff-runner');
 const { sessionCostUsd } = require('../llm-execution/cost');
 const { planGutenbergApply, applyGutenbergOps, htmlToBlocks } = require('../apply/gutenberg-apply');
+const { classifyDomain } = require('../competitor-corpus/collect');
 
 // in-memory job ストア (server プロセス再起動で消失、明示再実行で再投入)
 //   key: session_id (number) → compliance job
@@ -280,6 +281,7 @@ function fetchSessionEvidence(id) {
     const snap = parseSnap(r.fact_set_snapshot) || {};
     return {
       competitor_url: r.competitor_url, rank_position: r.rank_position,
+      site_type: classifyDomain(r.competitor_url),
       layer1: Array.isArray(snap.layer1) ? snap.layer1 : [],
       layer2: Array.isArray(snap.layer2) ? snap.layer2 : [],
     };

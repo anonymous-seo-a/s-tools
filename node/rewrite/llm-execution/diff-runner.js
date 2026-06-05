@@ -24,6 +24,7 @@ const db = require('../db');
 const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
 const { buildRunStructuredView, makeRunResolver } = require('../apply/gutenberg-apply');
 const { genreConfig } = require('./genre-config');
+const { classifyDomain } = require('../competitor-corpus/collect');
 const {
   SYSTEM_PROMPT,
   buildDiffUserPrompt,
@@ -160,6 +161,13 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
   const articleView = buildRunStructuredView(wp.content_raw);
   const resolveRun = makeRunResolver(articleView);
 
+  // 出典源プール: 競合コーパスのうち official/gov を信頼できる引用先として LLM に渡す。
+  const citationSources = (bundle.query_fanout_id == null ? [] : conn.prepare(
+    `SELECT competitor_url FROM master_competitor_corpus WHERE query_fanout_id=?`
+  ).all(bundle.query_fanout_id))
+    .map((r) => ({ url: r.competitor_url, type: classifyDomain(r.competitor_url) }))
+    .filter((s) => s.type === 'gov' || s.type === 'official');
+
   const userPrompt = buildDiffUserPrompt({
     post_id: session.post_id,
     title: wp.title,
@@ -169,6 +177,7 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
     bundle,
     master_rules: masterRules,
     genre: gcfg,
+    citation_sources: citationSources,
   });
 
   const llmRes = await sonnet({

@@ -171,6 +171,7 @@ function buildDiffUserPrompt({
   bundle,
   master_rules,
   genre,
+  citation_sources,
 }) {
   const protectedRegions = PROTECTED_CLASS_PATTERNS.map((p) => `  - ${p}`).join('\n');
   const sections = [];
@@ -191,6 +192,20 @@ ${JSON.stringify(analysis_output, null, 2)}`);
 rewrite_run は「見出し(target_section) + run_index」で run を特定すること。
 
 ${renderArticleView(article_view)}`);
+
+  if (Array.isArray(citation_sources) && citation_sources.length > 0) {
+    const list = citation_sources.map((s) => `- [${s.type}] ${s.url}`).join('\n');
+    sections.push(`# 出典源プール (信頼できる引用先)
+追加・修正した事実が下記の公式/政府ソースで裏付けられる場合、その diff の content_after に
+出典リンクを付与してよい (E-E-A-T 信頼性向上)。形式:
+<!-- wp:quote -->
+<blockquote class="wp-block-quote"><!-- wp:paragraph -->
+<p><a href="URL" target="_blank" rel="noopener">出典: サイト名</a></p>
+<!-- /wp:paragraph --></blockquote>
+<!-- /wp:quote -->
+**URL は必ず下記プールから選ぶこと。URL を創作してはならない。該当ソースが無ければ出典を付けない。**
+${list}`);
+  }
 
   sections.push(`# bundle snapshot (rationale.bundle_refs の index 参照元)
 ${JSON.stringify(bundle, null, 2)}`);

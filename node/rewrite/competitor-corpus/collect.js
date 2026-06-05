@@ -17,7 +17,8 @@
  *                                (案B # 4 master_query_fanout 投入は別タスク)
  */
 const db = require('../db');
-const { searchSerp } = require('../../shared/serpapi-adapter');
+// serpapi-adapter は require 時に SERPAPI_API_KEY を要求するため遅延 require。
+// (classifyDomain 等の純関数だけを他モジュールが import する時に key 不要にする)
 
 const FACT_SET_PENDING = JSON.stringify({ _pending: true });
 
@@ -35,13 +36,31 @@ const EXCLUDE_DOMAIN_SUFFIXES = [
   'acom.co.jp', 'promise.co.jp', 'aiful.co.jp', 'mobit.ne.jp', 'smbc-cf.com',
 ];
 
+function matchesSuffix(host, suffixes) {
+  return suffixes.some((s) => host === s || host.endsWith('.' + s));
+}
+
 function isExcludedDomain(url, extra = []) {
   let host;
   try { host = new URL(url).hostname.toLowerCase(); } catch { return true; }
-  return [...EXCLUDE_DOMAIN_SUFFIXES, ...extra].some((s) => host === s || host.endsWith('.' + s));
+  return matchesSuffix(host, [...EXCLUDE_DOMAIN_SUFFIXES, ...extra]);
 }
 
-async function collectCompetitorCorpus(query_fanout_id, { topN = 3, excludeDomains = [], mediaOnly = true } = {}) {
+// ドメイン種別: gov(政府=一次情報/出典) / official(企業公式) / media(比較・メディア)。
+// 「除外」ではなく「役割」(media=網羅基準, official/gov=出典源) の判定に使う。
+function classifyDomain(url) {
+  let host;
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return 'media'; }
+  if (matchesSuffix(host, ['go.jp', 'go.kr']) || host.endsWith('.gov')) return 'gov';
+  // 企業公式 = EXCLUDE_DOMAIN_SUFFIXES のうち go.jp/自サイト以外
+  const official = EXCLUDE_DOMAIN_SUFFIXES.filter((s) => !s.endsWith('go.jp') && s !== 'soico.jp');
+  if (matchesSuffix(host, official)) return 'official';
+  return 'media';
+}
+
+// 既定 mediaOnly=false: SERP 上位全部を IG 源にする (= 順位の ground truth)。
+// mediaOnly=true は「メディアが上位に居るか」のターゲット選定信号用途。
+async function collectCompetitorCorpus(query_fanout_id, { topN = 3, excludeDomains = [], mediaOnly = false } = {}) {
   const conn = db.open();
   const parent = conn
     .prepare('SELECT id, sub_query FROM master_query_fanout WHERE id=?')
@@ -50,6 +69,7 @@ async function collectCompetitorCorpus(query_fanout_id, { topN = 3, excludeDomai
     throw new Error(`master_query_fanout id=${query_fanout_id} not found`);
   }
 
+  const { searchSerp } = require('../../shared/serpapi-adapter');
   const serp = await searchSerp(parent.sub_query);
   // mediaOnly: 企業公式/政府を除外してメディア/比較サイトのみを上位 topN 競合に。
   const pool = (serp.organic || []).filter((r) => r.link && typeof r.position === 'number');
@@ -105,4 +125,4 @@ async function collectCompetitorCorpus(query_fanout_id, { topN = 3, excludeDomai
   };
 }
 
-module.exports = { collectCompetitorCorpus, isExcludedDomain, EXCLUDE_DOMAIN_SUFFIXES };
+module.exports = { collectCompetitorCorpus, isExcludedDomain, classifyDomain, EXCLUDE_DOMAIN_SUFFIXES };
