@@ -10,6 +10,13 @@ const STATUS_OPTIONS = [
   { key: 'failed',                 label: '失敗' },
 ];
 
+const GENRE_OPTIONS = [
+  { key: '',           label: '全カテゴリ' },
+  { key: 'cardloan',   label: 'カードローン' },
+  { key: 'securities', label: '証券' },
+];
+const GENRE_LABEL = { cardloan: 'カードローン', securities: '証券' };
+
 const JUDGMENT_BADGE = {
   pending:  'pending',
   approved: 'approved',
@@ -49,6 +56,9 @@ function SessionRow({ s, selected, onSelect }) {
     >
       <td style={{ padding: '8px 12px', color: '#888' }}>{s.id}</td>
       <td style={{ padding: '8px 12px', fontFamily: 'monospace' }}>{s.post_id}</td>
+      <td style={{ padding: '8px 12px', fontSize: 11, color: s.genre === 'securities' ? '#1565c0' : '#6a1b9a' }}>
+        {GENRE_LABEL[s.genre] || s.genre || '—'}
+      </td>
       <td style={{ padding: '8px 12px' }}>
         <span className={`status-badge ${s.status === 'awaiting_diff_judgment' ? 'pending'
                        : s.status === 'completed' ? 'approved'
@@ -109,8 +119,10 @@ function DiffCard({ diff, onJudge, busyId }) {
 
   const isBusy = busyId === diff.id;
   const badgeClass = JUDGMENT_BADGE[diff.daiki_judgment] || 'pending';
-  // 適用される実コンテンツ: Daiki 編集があればそれ、なければ LLM の content_after
-  const effectiveAfter = diff.daiki_edit_content || diff.content_after || '';
+  // AFTER 表示は「実際に WP へ適用される Gutenberg block markup」(API 算出 content_after_blocks)。
+  // BEFORE (content_before) も run の block markup なので、diff を投稿と同じブロック形式で確認できる。
+  // fallback: 古い session (block 未算出) は素の content_after。
+  const effectiveAfter = diff.content_after_blocks || diff.daiki_edit_content || diff.content_after || '';
 
   const handleApprove = () => onJudge(diff.id, { judgment: 'approved' });
   const handleStartReject = () => {
@@ -174,7 +186,7 @@ function DiffCard({ diff, onJudge, busyId }) {
         </div>
         <div>
           <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-            AFTER{diff.daiki_edit_content ? ' (Daiki 編集済 — これが適用される)' : ''}
+            AFTER (ブロックマークアップ・WP 適用形){diff.daiki_edit_content ? ' / Daiki 編集済' : ''}
           </div>
           <pre style={{
             background: diff.daiki_edit_content ? '#e3f2fd' : '#f1f8e9',
@@ -222,7 +234,7 @@ function DiffCard({ diff, onJudge, busyId }) {
       {editing && (
         <div style={{ marginTop: 8, padding: 10, background: '#e3f2fd', borderRadius: 6 }}>
           <div style={{ fontSize: 12, marginBottom: 4 }}>
-            AFTER を編集して承認 (この HTML がそのまま WP に適用される。空にすると LLM 原案で承認):
+            AFTER を編集して承認 (Gutenberg ブロックマークアップ。このまま WP に適用される。空にすると LLM 原案で承認):
           </div>
           <textarea
             rows={8}
@@ -491,6 +503,7 @@ function GenerationPanel({ showToast, onSessionCreated }) {
   const [queryFanouts, setQueryFanouts] = useState([]);
   const [queryFanoutId, setQueryFanoutId] = useState('');
   const [enableCompliance, setEnableCompliance] = useState(true);
+  const [genre, setGenre] = useState('cardloan');
   const [job, setJob] = useState(null);
 
   useEffect(() => {
@@ -530,7 +543,7 @@ function GenerationPanel({ showToast, onSessionCreated }) {
     const ok = confirm(`post_id=${pid} query_fanout=${qfid} で生成します。\n推定: Opus + Sonnet${enableCompliance ? ' + Layer 2 compliance' : ''} = 約 $0.6 / 3 分。続行?`);
     if (!ok) return;
     try {
-      const j = await api.startGenerationJob({ post_id: pid, query_fanout_id: qfid, enableCompliance });
+      const j = await api.startGenerationJob({ post_id: pid, query_fanout_id: qfid, enableCompliance, genre });
       setJob(j);
       showToast('生成開始');
     } catch (e) {
@@ -551,6 +564,11 @@ function GenerationPanel({ showToast, onSessionCreated }) {
         <div className="article-title">新規セッション生成 (一気通貫: analysis → diff → compliance)</div>
       </div>
       <div style={{ padding: 12, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+        <label style={{ fontSize: 12, color: '#666' }}>カテゴリ</label>
+        <select value={genre} onChange={(e) => setGenre(e.target.value)} disabled={running}>
+          <option value="cardloan">カードローン</option>
+          <option value="securities">証券</option>
+        </select>
         <label style={{ fontSize: 12, color: '#666' }}>post_id</label>
         <input
           type="number"
@@ -592,6 +610,7 @@ function GenerationPanel({ showToast, onSessionCreated }) {
 
 export default function RewriteJudgmentView({ showToast }) {
   const [status, setStatus] = useState('awaiting_diff_judgment');
+  const [genre, setGenre] = useState('');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -599,7 +618,7 @@ export default function RewriteJudgmentView({ showToast }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.getJudgmentSessions({ status: status || undefined, limit: 100 });
+      const r = await api.getJudgmentSessions({ status: status || undefined, genre: genre || undefined, limit: 100 });
       setItems(r.items || []);
       if (selectedId == null && r.items && r.items.length > 0) {
         setSelectedId(r.items[0].id);
@@ -608,9 +627,9 @@ export default function RewriteJudgmentView({ showToast }) {
       showToast(e.message, 'error');
     }
     setLoading(false);
-  }, [status, selectedId, showToast]);
+  }, [status, genre, selectedId, showToast]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status, genre]);
 
   return (
     <div>
@@ -620,6 +639,10 @@ export default function RewriteJudgmentView({ showToast }) {
       />
 
       <div className="filters">
+        <label style={{ fontSize: 12, color: '#888' }}>カテゴリ</label>
+        <select value={genre} onChange={(e) => { setGenre(e.target.value); setSelectedId(null); }}>
+          {GENRE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+        </select>
         <label style={{ fontSize: 12, color: '#888' }}>ステータス</label>
         <select value={status} onChange={(e) => { setStatus(e.target.value); setSelectedId(null); }}>
           {STATUS_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
@@ -643,6 +666,7 @@ export default function RewriteJudgmentView({ showToast }) {
               <tr style={{ background: '#f8f9fa', borderBottom: '2px solid #eee' }}>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>id</th>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>post_id</th>
+                <th style={{ padding: '10px 12px', textAlign: 'left' }}>カテゴリ</th>
                 <th style={{ padding: '10px 12px', textAlign: 'left' }}>status</th>
                 <th style={{ padding: '10px 12px', textAlign: 'right' }}>diffs</th>
                 <th style={{ padding: '10px 12px', textAlign: 'right' }}>pending / appr / rej</th>

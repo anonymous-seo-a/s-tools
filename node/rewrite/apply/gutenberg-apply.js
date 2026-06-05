@@ -226,6 +226,8 @@ const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
  */
 function htmlToBlocks(html) {
   if (typeof html !== 'string' || html.trim() === '') return '';
+  // 既に Gutenberg block markup なら二重ラップしない (編集欄でブロック markup を直接編集した場合)。
+  if (/^\s*<!--\s*wp:/.test(html)) return html.trim();
   const $ = cheerio.load(html, { decodeEntities: false });
   const root = $('body').length ? $('body')[0] : null;
   const nodes = root ? root.children : [];

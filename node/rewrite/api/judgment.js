@@ -6,7 +6,7 @@ const { runComplianceCheck } = require('../llm-execution/compliance-runner');
 const { runAnalysis } = require('../llm-execution/analysis-runner');
 const { runDiffGeneration } = require('../llm-execution/diff-runner');
 const { sessionCostUsd } = require('../llm-execution/cost');
-const { planGutenbergApply, applyGutenbergOps } = require('../apply/gutenberg-apply');
+const { planGutenbergApply, applyGutenbergOps, htmlToBlocks } = require('../apply/gutenberg-apply');
 
 // in-memory job ストア (server プロセス再起動で消失、明示再実行で再投入)
 //   key: session_id (number) → compliance job
@@ -24,9 +24,9 @@ async function runGenerationPipeline(job, conn) {
   job.step = 'session_init';
   const info = conn.prepare(
     `INSERT INTO master_rewrite_session
-       (post_id, model_analysis, model_generation, triggered_by, status)
-     VALUES (?, 'claude-opus-4-7', 'claude-sonnet-4-6', 'ui-generation', 'planned')`
-  ).run(post_id);
+       (post_id, model_analysis, model_generation, triggered_by, status, genre)
+     VALUES (?, 'claude-opus-4-7', 'claude-sonnet-4-6', 'ui-generation', 'planned', ?)`
+  ).run(post_id, genre);
   const session_id = info.lastInsertRowid;
   job.session_id = session_id;
 
@@ -177,19 +177,19 @@ const VALID_SESSION_STATUSES = new Set([
 
 const VALID_JUDGMENTS = new Set(['pending', 'approved', 'rejected']);
 
-function fetchSessions({ status, limit }) {
+function fetchSessions({ status, genre, limit }) {
   const conn = open();
   const params = [];
-  let where = '';
-  if (status) {
-    where = 'WHERE s.status = ?';
-    params.push(status);
-  }
+  const conds = [];
+  if (status) { conds.push('s.status = ?'); params.push(status); }
+  if (genre) { conds.push('s.genre = ?'); params.push(genre); }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   const sql = `
     SELECT
       s.id,
       s.post_id,
       s.status,
+      s.genre,
       s.model_analysis,
       s.model_generation,
       s.input_tokens_analysis,
@@ -222,7 +222,7 @@ function fetchSessionDetail(id) {
   const conn = open();
   const session = conn.prepare(`
     SELECT
-      id, post_id, status, model_analysis, model_generation,
+      id, post_id, status, genre, model_analysis, model_generation,
       input_tokens_analysis, output_tokens_analysis,
       input_tokens_generation, output_tokens_generation,
       cost_total_usd, analysis_output, high_risk_categories,
@@ -245,8 +245,16 @@ function fetchSessionDetail(id) {
     WHERE session_id = ?
     ORDER BY diff_order, id
   `).all(id);
+  // content_after_blocks: 実際に WP へ適用される Gutenberg block markup (= htmlToBlocks の出力)。
+  // UI の AFTER 表示を「投稿と同じブロック markup」にするための算出フィールド。
+  const diffsWithBlocks = diffs.map((d) => {
+    const after = d.daiki_edit_content || d.content_after || '';
+    let blocks = '';
+    try { blocks = htmlToBlocks(after); } catch { blocks = after; }
+    return { ...d, content_after_blocks: blocks };
+  });
   // cost_total_usd は token から算出して上書き (保存列は常に null のため)。
-  return { ...session, cost_total_usd: sessionCostUsd(session), diffs };
+  return { ...session, cost_total_usd: sessionCostUsd(session), diffs: diffsWithBlocks };
 }
 
 function updateDiffJudgment(id, { judgment, reject_reason, reject_note, edit_content }) {
@@ -289,10 +297,13 @@ function buildRouter() {
       if (status !== undefined && !VALID_SESSION_STATUSES.has(status)) {
         return res.status(400).json({ error: 'invalid status', allowed: [...VALID_SESSION_STATUSES] });
       }
-      const items = fetchSessions({ status, limit });
+      let genre = req.query.genre;
+      if (genre === '' || genre === 'all') genre = undefined;
+      const items = fetchSessions({ status, genre, limit });
       return res.json({
         limit,
         status: status || null,
+        genre: genre || null,
         count: items.length,
         items,
       });

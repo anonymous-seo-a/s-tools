@@ -26,8 +26,19 @@ function initSchema() {
   // Phase E のみ初期化された旧スナップショットでも、不足分のみ追加される。
   const ddl = fs.readFileSync(SCHEMA_PATH, 'utf8');
   conn.exec(ddl);
+  // 列追加マイグレーション (CREATE IF NOT EXISTS は既存テーブルに列を足さないため、
+  // 旧 DB を新コードで開いた時の不足列を idempotent に補う)。
+  ensureColumn(conn, 'master_rewrite_session', 'genre', "TEXT NOT NULL DEFAULT 'cardloan'");
   const after = conn.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name LIKE 'master_%'").get();
   return { initialized: true, existing_tables: before.n, total_tables: after.n, added_tables: after.n - before.n };
+}
+
+function ensureColumn(conn, table, column, decl) {
+  const cols = conn.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) {
+    conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+    console.warn(`[rewrite-db] migrated: added ${table}.${column}`);
+  }
 }
 
 function attachMonitorReadOnly(conn) {

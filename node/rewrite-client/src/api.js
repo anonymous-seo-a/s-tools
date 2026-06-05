@@ -132,6 +132,7 @@ export const api = {
   getJudgmentSessions: (params = {}) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set('status', params.status);
+    if (params.genre) qs.set('genre', params.genre);
     if (params.limit) qs.set('limit', String(params.limit));
     const q = qs.toString();
     return request(`/api/rewrite/judgment/sessions${q ? `?${q}` : ''}`);

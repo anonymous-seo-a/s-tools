@@ -209,6 +209,7 @@ CREATE INDEX IF NOT EXISTS idx_qsl_session ON master_rewrite_queue_session_link(
 CREATE TABLE IF NOT EXISTS master_rewrite_session (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   post_id INTEGER NOT NULL,
+  genre TEXT NOT NULL DEFAULT 'cardloan',
   model_analysis TEXT NOT NULL,
   model_generation TEXT NOT NULL,
   input_tokens_analysis INTEGER,
