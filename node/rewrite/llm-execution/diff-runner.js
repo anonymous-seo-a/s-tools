@@ -22,7 +22,7 @@
 const cheerio = require('cheerio');
 const db = require('../db');
 const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
-const { extractSelfArticle, findSectionByTargetSection } = require('../../shared/wp-structured');
+const { buildRunStructuredView, makeRunResolver } = require('../apply/gutenberg-apply');
 const {
   SYSTEM_PROMPT,
   buildDiffUserPrompt,
@@ -32,15 +32,18 @@ const {
   MAX_DIFFS_TOTAL,
 } = require('./case-c-diff-prompt');
 
+// content.raw (Gutenberg block markup) を取得。run 単位の diff 生成・適用は raw が前提。
 async function fetchWpContent(postId) {
   const raw = (process.env.WP_API_BASE_URL || '').replace(/\/$/, '');
   const apiRoot = /\/wp-json\/wp\/v\d+/.test(raw) ? raw : `${raw}/wp-json/wp/v2`;
   const auth = Buffer.from(`${process.env.WP_API_USERNAME}:${process.env.WP_API_APP_PASSWORD}`).toString('base64');
-  const url = `${apiRoot}/posts/${postId}?_fields=id,title,content,link`;
+  const url = `${apiRoot}/posts/${postId}?context=edit&_fields=id,title,content`;
   const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
-  if (!res.ok) throw new Error(`WP REST ${res.status} for post ${postId}`);
+  if (!res.ok) throw new Error(`WP REST ${res.status} for post ${postId} (context=edit 権限を確認)`);
   const p = await res.json();
-  return { post_id: p.id, title: p.title?.rendered || '', content_html: p.content?.rendered || '' };
+  const content_raw = p.content?.raw;
+  if (content_raw == null) throw new Error(`post ${postId}: content.raw 取得不可 (edit 権限不足)`);
+  return { post_id: p.id, title: p.title?.raw ?? p.title?.rendered ?? '', content_raw };
 }
 
 function parseDiffsJson(text) {
@@ -109,6 +112,7 @@ function validateDiff(d, idx) {
   const errs = [];
   if (typeof d.target_section !== 'string' || !d.target_section.trim()) errs.push('target_section');
   if (!CHANGE_TYPES.includes(d.change_type)) errs.push(`change_type=${d.change_type}`);
+  if (d.change_type === 'rewrite_run' && !Number.isInteger(d.run_index)) errs.push('run_index(rewrite_run必須)');
   if (!CHANGE_CATEGORIES.includes(d.change_category)) errs.push(`change_category=${d.change_category}`);
   if (d.risk_flag != null && !RISK_FLAGS.includes(d.risk_flag)) errs.push(`risk_flag=${d.risk_flag}`);
   if (!['high', 'medium', 'low'].includes(d.llm_confidence)) errs.push(`llm_confidence=${d.llm_confidence}`);
@@ -151,14 +155,15 @@ async function runDiffGeneration({ session_id }) {
   ).all();
 
   const wp = await fetchWpContent(session.post_id);
-  const struct = extractSelfArticle(wp.content_html);
+  const articleView = buildRunStructuredView(wp.content_raw);
+  const resolveRun = makeRunResolver(articleView);
 
   const userPrompt = buildDiffUserPrompt({
     post_id: session.post_id,
     title: wp.title,
     target_query: bundle.target_query,
     analysis_output: analysis,
-    self_structure: struct,
+    article_view: articleView,
     bundle,
     master_rules: masterRules,
   });
@@ -192,17 +197,16 @@ async function runDiffGeneration({ session_id }) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
-  // content_before は target_section が "h*#…" で原 HTML から解決できる場合は
-  // server side で raw_html_block を補填する (LLM 出力の hallucination を排除)。
-  // meta:* / p#… / outline:* / 見つからない見出しは LLM 出力をそのまま使う。
+  // rewrite_run の content_before は (target_section, run_index) から run の raw markup を
+  // server side で補填する (LLM の hallucination 排除 + apply の照合キーになる)。
+  // insert 系 / meta 系 / run 解決不可は content_before = null。
   let server_resolved_count = 0;
   const tx = conn.transaction((rows) => {
     rows.forEach((d, idx) => {
-      let contentBefore = d.content_before ?? null;
-      const sec = findSectionByTargetSection(struct, d.target_section);
-      if (sec && sec.raw_html_block) {
-        contentBefore = sec.raw_html_block;
-        server_resolved_count++;
+      let contentBefore = null;
+      if (d.change_type === 'rewrite_run' && Number.isInteger(d.run_index)) {
+        const runMarkup = resolveRun(d.target_section, d.run_index);
+        if (runMarkup) { contentBefore = runMarkup; server_resolved_count++; }
       }
       insertDiff.run(
         session_id,

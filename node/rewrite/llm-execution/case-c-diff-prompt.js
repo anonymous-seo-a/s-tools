@@ -22,6 +22,7 @@
 const PROTECTED_CLASS_PATTERNS = ['soico-cta-*', 'box-###', 'ez-toc-*'];
 
 const CHANGE_TYPES = [
+  'rewrite_run',        // 本文 run の書き換え (target_section + run_index で指定)
   'rewrite_section',
   'rewrite_paragraph',
   'insert_after',
@@ -62,21 +63,26 @@ const SYSTEM_PROMPT = `あなたは SEO リライト差分生成者 (YMYL 領域
 1. 各 rewrite_policy を具体的な diff 1〜${MAX_DIFFS_PER_POLICY} 件に展開
 2. 全体で最大 ${MAX_DIFFS_TOTAL} 件まで (priority 上位を優先、過剰分割禁止)
 3. target_section / change_type / change_category / risk_flag を選択
-4. content_after (提案) を HTML 文字列で生成
-   content_before は target_section が h*#… で見出し一致するなら server が原 HTML を自動補填するため、null または空文字でよい
-   (meta:* / outline:* / p#… 等の場合のみ LLM 出力が DB に残るため content_before を生成)
+4. 既存本文の書き換えは必ず change_type='rewrite_run' とし、対象を
+   target_section (見出し) + run_index で指定する。content_after に新本文 HTML を生成。
+   content_before は server が run_index から自動補填するため出力不要 (null)。
+   - 「元記事の編集可能構造」に示された [run N] が書き換え単位。表/CTA/画像など
+     【保護ブロック】は編集不可・位置固定なので絶対に書き換え対象にしない。
+   - 本文を追加する場合は insert_before / insert_after (+ target_section)。
+   - meta:title / meta:description は update_title / update_meta_description。
 5. rationale JSON で根拠を記述 (uses_bundle_refs 由来を反映)
-6. 保護領域 CSS class set 配下は変更対象から除外
+6. 保護ブロック (【…】) の中身を書き換える diff は生成禁止
 
 # diff 出力スキーマ (V-A-3-3 準拠)
 {
   "diffs": [
     {
       "diff_order": 1,
-      "target_section": "string (例: 'h2#申込手順', 'p#3-2', 'meta:title')",
+      "target_section": "string (見出し: 'h2#申込手順' / 'h3#1位：楽天証券' / meta: 'meta:title')",
+      "run_index": "integer (rewrite_run のとき必須。元記事構造の [run N] の N)",
       "change_type": "${CHANGE_TYPES.join(' | ')}",
       "change_category": "${CHANGE_CATEGORIES.join(' | ')}",
-      "content_before": "null 推奨 (h*#… 系では server が補填、meta:*/outline:*/p#… のみ LLM 出力を保持)",
+      "content_before": "null (server が run_index から補填)",
       "content_after":  "HTML 文字列 (delete系では null 可)",
       "rationale": {
         "primary_source": "fact_set_required_addition | embedding_shallow_query | embedding_shallow_fact | hcu_violation | compliance_rule",
@@ -108,11 +114,10 @@ change_type   : ${CHANGE_TYPES.join(' / ')}
 change_category: ${CHANGE_CATEGORIES.join(' / ')}
 risk_flag     : null または ${RISK_FLAGS.join(' / ')}
 
-# target_section 命名規約
+# target_section 命名規約 (元記事構造の見出しと完全一致させる)
+- 見出し: 'h2#<見出しテキスト>' / 'h3#<見出しテキスト>' / 'h4#<見出しテキスト>'
 - meta 系: 'meta:title' / 'meta:description'
-- 見出し: 'h2#<見出しテキスト>' / 'h3#<見出しテキスト>' (テキスト一致を優先)
-- 段落:   'p#<セクション順>-<段落順>' (例: 'p#3-2')
-- 構成変更: 'outline:<対象>' (例: 'outline:section-3')
+- rewrite_run は上記見出し + run_index で run を一意特定する
 
 # YMYL 制約 (必須遵守、違反 diff は生成禁止)
 以下の表現は content_after に絶対に含めない:
@@ -144,12 +149,26 @@ content_before として保護領域 (PROTECTED_REGIONS で示される CSS clas
 - diff_order は配列内連番 1-based
 - rationale.policy_index は analysis_output.rewrite_policy の 0-based index`;
 
+// run 構造ビューを LLM 提示用テキストに整形。
+function renderArticleView(view, maxChars = 12000) {
+  const lines = [];
+  for (const s of view || []) {
+    lines.push(`## ${s.target_section}`);
+    for (const it of s.items) {
+      if (it.kind === 'run') lines.push(`[run ${it.run_index}]\n${(it.text || '').slice(0, 1200)}`);
+      else lines.push(`【保護ブロック: ${it.label}】`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n').slice(0, maxChars);
+}
+
 function buildDiffUserPrompt({
   post_id,
   title,
   target_query,
   analysis_output,
-  self_structure,
+  article_view,
   bundle,
   master_rules,
 }) {
@@ -164,13 +183,12 @@ target_query (Q[i]): ${target_query}`);
   sections.push(`# analysis_output (工程6'-A Opus 4.7 出力)
 ${JSON.stringify(analysis_output, null, 2)}`);
 
-  const headings = (self_structure?.headings || []).slice(0, 50);
-  sections.push(`# 元記事構造 (見出し階層、抜粋)
-${JSON.stringify(headings, null, 2)}`);
+  sections.push(`# 元記事の編集可能構造
+[run N] = 書き換え可能な本文塊 (rewrite_run の対象、run_index=N)。
+【保護ブロック】 = 再利用ブロック/CTA/画像など、編集不可・位置固定 (絶対に書き換えない)。
+rewrite_run は「見出し(target_section) + run_index」で run を特定すること。
 
-  const plainExcerpt = (self_structure?.plain_text || '').slice(0, 6000);
-  sections.push(`# 元記事 plain_text (冒頭 6000 字、content_before の文言根拠)
-${plainExcerpt}`);
+${renderArticleView(article_view)}`);
 
   sections.push(`# bundle snapshot (rationale.bundle_refs の index 参照元)
 ${JSON.stringify(bundle, null, 2)}`);
@@ -188,7 +206,9 @@ ${protectedRegions}
   sections.push(`# 指示
 analysis_output.rewrite_policy 各要素を、priority 順に最大 ${MAX_DIFFS_TOTAL} 件の diff へ展開せよ。
 - 1 policy → 1〜${MAX_DIFFS_PER_POLICY} 件
-- content_before: target_section が h*#… なら null でよい (server 補填)、meta:*/outline:*/p#… のみ既存文言を抽出
+- 既存本文の書き換え = rewrite_run + target_section + run_index (content_before は null、server 補填)
+- 本文追加 = insert_before / insert_after + target_section
+- 【保護ブロック】は書き換え対象にしない (run のみ対象)
 - content_after は妥当な HTML 構造 (cheerio パース可能)
 - analysis_output.high_risk_categories 該当の policy は対応する diff で risk_flag をセット
 - 上記スキーマに従い JSON のみで応答`);
@@ -199,6 +219,7 @@ analysis_output.rewrite_policy 各要素を、priority 順に最大 ${MAX_DIFFS_
 module.exports = {
   SYSTEM_PROMPT,
   buildDiffUserPrompt,
+  renderArticleView,
   PROTECTED_CLASS_PATTERNS,
   CHANGE_TYPES,
   CHANGE_CATEGORIES,

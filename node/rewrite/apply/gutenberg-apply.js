@@ -157,6 +157,63 @@ function blocksPlainText(blocks) {
   return blocks.map((b) => b.markup.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
 }
 
+// 保護ブロック型 → 生成プロンプト用の日本語ラベル。
+function protectedLabel(type) {
+  if (type === 'block') return '再利用ブロック';
+  if (type === 'image') return '画像';
+  if (type === 'html') return 'HTMLブロック';
+  if (type === 'embed') return '埋め込み';
+  if (type.startsWith('soico-cta/')) return `部品(${type.replace('soico-cta/', '')})`;
+  if (type.includes('/')) return `独自ブロック(${type})`;
+  return type;
+}
+
+/**
+ * content.raw を「見出し section → run(本文塊) と保護ブロックのプレースホルダ」の順序付き
+ * 構造に変換する。生成側 (diff-runner) が LLM に提示し、rewrite_run の run_index から
+ * content_before(run の raw markup) を解決するのに使う。
+ *
+ * @returns Array<{ target_section, level, heading,
+ *   items: Array<{kind:'run', run_index, text} | {kind:'protected', type, label}>,
+ *   runs: Array<{run_index, start, end, markup, text}> }>
+ */
+function buildRunStructuredView(raw) {
+  const blocks = parseTopLevelBlocks(raw);
+  const sections = [];
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].type !== 'heading' || blocks[i].headingLevel == null) continue;
+    const h = blocks[i];
+    const { endIdx } = sectionBlockRange(blocks, i);
+    const items = [];
+    const runs = [];
+    let cur = [];
+    const flush = () => {
+      if (!cur.length) return;
+      const first = cur[0], last = cur[cur.length - 1];
+      const run = { run_index: runs.length, start: first.start, end: last.end, markup: raw.slice(first.start, last.end), text: blocksPlainText(cur) };
+      runs.push(run);
+      items.push({ kind: 'run', run_index: run.run_index, text: run.text });
+      cur = [];
+    };
+    for (let j = i + 1; j <= endIdx; j++) {
+      const b = blocks[j];
+      const editable = !b.isProtected && b.type !== 'heading' && SAFE_BLOCK_TYPES.has(b.type);
+      if (editable) cur.push(b);
+      else { flush(); items.push({ kind: 'protected', type: b.type, label: protectedLabel(b.type) }); }
+    }
+    flush();
+    sections.push({ target_section: `h${h.headingLevel}#${h.headingText}`, level: h.headingLevel, heading: h.headingText, items, runs });
+  }
+  return sections;
+}
+
+// (target_section, run_index) → run の raw markup を引く resolver を作る。
+function makeRunResolver(view) {
+  const map = new Map();
+  for (const s of view) for (const r of s.runs) map.set(`${s.target_section}#run${r.run_index}`, r.markup);
+  return (target_section, runIndex) => map.get(`${target_section}#run${runIndex}`) || null;
+}
+
 // ─────────────────────────────────────────────────────────────
 // HTML → Gutenberg ブロック markup
 // ─────────────────────────────────────────────────────────────
@@ -323,6 +380,9 @@ module.exports = {
   findHeadingIndex,
   sectionBlockRange,
   segmentSectionRuns,
+  buildRunStructuredView,
+  makeRunResolver,
+  protectedLabel,
   htmlToBlocks,
   planGutenbergApply,
   applyGutenbergOps,
