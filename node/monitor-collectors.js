@@ -11,7 +11,9 @@ const config = require('./config');
 const KEY_FILE = process.env.GOOGLE_APPLICATION_CREDENTIALS
   ? path.resolve(__dirname, process.env.GOOGLE_APPLICATION_CREDENTIALS)
   : path.join(__dirname, 'service-account-key.json');
-const GA4_PROPERTY_ID = process.env.GA4_PROPERTY_ID || '516785717';
+// .env の GA4_PROPERTY_ID が "properties/516785717" 形式でも "516785717" でも動くよう正規化。
+// (コードは `properties/${GA4_PROPERTY_ID}` を組むため、prefix 重複で 404 になっていた)
+const GA4_PROPERTY_ID = (process.env.GA4_PROPERTY_ID || '516785717').replace(/^properties\//, '');
 const GSC_SITE_URL = process.env.GSC_PROPERTY_URL || 'https://www.soico.jp/no1/';
 
 // ============================================================
