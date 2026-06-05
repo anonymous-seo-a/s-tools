@@ -6,6 +6,7 @@ const { open } = require('../db');
 const { runComplianceCheck } = require('../llm-execution/compliance-runner');
 const { runAnalysis } = require('../llm-execution/analysis-runner');
 const { runDiffGeneration } = require('../llm-execution/diff-runner');
+const { sessionCostUsd } = require('../llm-execution/cost');
 
 // in-memory job ストア (server プロセス再起動で消失、明示再実行で再投入)
 //   key: session_id (number) → compliance job
@@ -245,7 +246,10 @@ function fetchSessions({ status, limit }) {
       s.status,
       s.model_analysis,
       s.model_generation,
-      s.cost_total_usd,
+      s.input_tokens_analysis,
+      s.output_tokens_analysis,
+      s.input_tokens_generation,
+      s.output_tokens_generation,
       s.policy_judgment,
       s.high_risk_categories,
       s.started_at,
@@ -264,7 +268,8 @@ function fetchSessions({ status, limit }) {
     LIMIT ?
   `;
   params.push(limit);
-  return conn.prepare(sql).all(...params);
+  // cost_total_usd は保存値ではなく token から算出 (cost.js、常に正)。
+  return conn.prepare(sql).all(...params).map((s) => ({ ...s, cost_total_usd: sessionCostUsd(s) }));
 }
 
 function fetchSessionDetail(id) {
@@ -294,7 +299,8 @@ function fetchSessionDetail(id) {
     WHERE session_id = ?
     ORDER BY diff_order, id
   `).all(id);
-  return { ...session, diffs };
+  // cost_total_usd は token から算出して上書き (保存列は常に null のため)。
+  return { ...session, cost_total_usd: sessionCostUsd(session), diffs };
 }
 
 function updateDiffJudgment(id, { judgment, reject_reason, reject_note, edit_content }) {
