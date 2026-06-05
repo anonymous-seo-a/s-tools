@@ -27,7 +27,24 @@ function getDB() {
   db.pragma('synchronous = NORMAL');
   db.pragma('foreign_keys = ON');
   initSchema(db);
+  reconcileStaleJobs(db);
   return db;
+}
+
+// プロセス再起動時、前回クラッシュで status='running' のまま残った collection_jobs を
+// 'failed' に落とす。これをしないと isJobRunning() が true を返し続け、daily / backfill /
+// yahoo_scrape / kw_weekly が「already running」で永久に skip される。
+function reconcileStaleJobs(d) {
+  try {
+    const r = d.prepare(
+      `UPDATE collection_jobs
+       SET status='failed', finished_at=?, error_message='stale (process restart)'
+       WHERE status='running'`
+    ).run(new Date().toISOString());
+    if (r.changes > 0) console.warn(`[monitor-db] reconciled ${r.changes} stale running job(s)`);
+  } catch (e) {
+    console.error('[monitor-db] reconcileStaleJobs failed:', e.message);
+  }
 }
 
 function initSchema(d) {

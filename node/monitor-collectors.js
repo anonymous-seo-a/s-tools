@@ -5,7 +5,12 @@ const { google } = require('googleapis');
 const path = require('path');
 const config = require('./config');
 
-const KEY_FILE = path.join(__dirname, 'service-account-key.json');
+// 鍵パスは GOOGLE_APPLICATION_CREDENTIALS を優先 (相対パスは node/ 基準で解決)、
+// 未設定時のみ従来の node/service-account-key.json にフォールバック。
+// (旧: __dirname 固定ハードコードが env var を無視し ENOENT → 「今すぐ更新」500 の原因だった)
+const KEY_FILE = process.env.GOOGLE_APPLICATION_CREDENTIALS
+  ? path.resolve(__dirname, process.env.GOOGLE_APPLICATION_CREDENTIALS)
+  : path.join(__dirname, 'service-account-key.json');
 const GA4_PROPERTY_ID = process.env.GA4_PROPERTY_ID || '516785717';
 const GSC_SITE_URL = process.env.GSC_PROPERTY_URL || 'https://www.soico.jp/no1/';
 

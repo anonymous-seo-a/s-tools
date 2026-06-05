@@ -1266,6 +1266,16 @@ app.get(/^\/rewrite(\/.*)?$/, (req, res) => {
 <p><a href="/">← s-tools トップへ</a></p></body></html>`);
 });
 
+// グローバル error middleware: Express 5 は async ハンドラの reject も自動でここへ渡す。
+// 未定義だとデフォルトの HTML スタックトレースが返るため、JSON {error} に統一する。
+// (4 引数シグネチャが error handler の識別条件なので next は未使用でも残す)
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(`[unhandled ${req.method} ${req.path}]`, err);
+  if (res.headersSent) return;
+  res.status(err.status || 500).json({ error: err.message || 'internal error' });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`CTA Gap Fill Server: http://localhost:${PORT}`);
