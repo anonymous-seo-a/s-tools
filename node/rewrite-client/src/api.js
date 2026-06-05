@@ -139,6 +139,8 @@ export const api = {
   },
   getJudgmentSession: (id) =>
     request(`/api/rewrite/judgment/sessions/${id}`),
+  getSessionEvidence: (id) =>
+    request(`/api/rewrite/judgment/sessions/${id}/evidence`),
   updateDiffJudgment: (id, body) =>
     request(`/api/rewrite/judgment/diffs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 

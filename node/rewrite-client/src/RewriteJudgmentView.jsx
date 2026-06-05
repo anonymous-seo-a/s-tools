@@ -300,6 +300,77 @@ function DiffCard({ diff, onJudge, busyId }) {
   );
 }
 
+function EvidenceSection({ title, children }) {
+  return (
+    <details open style={{ marginBottom: 8 }}>
+      <summary style={{ cursor: 'pointer', color: '#37474f', fontWeight: 600 }}>{title}</summary>
+      <ul style={{ margin: '4px 0 0', paddingLeft: 18, lineHeight: 1.6 }}>{children}</ul>
+    </details>
+  );
+}
+
+// 情報ゲイン根拠データ (投入した事実・競合・IG) を UI から確認する折りたたみパネル。
+function EvidencePanel({ sessionId }) {
+  const [open, setOpen] = useState(false);
+  const [ev, setEv] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { setOpen(false); setEv(null); }, [sessionId]);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !ev && sessionId) {
+      setLoading(true);
+      try { setEv(await api.getSessionEvidence(sessionId)); }
+      catch (e) { setEv({ error: e.message }); }
+      setLoading(false);
+    }
+  };
+
+  const ra = ev?.bundle?.required_additions || [];
+  return (
+    <div style={{ margin: '10px 0', border: '1px solid #cfd8dc', borderRadius: 8, background: 'white' }}>
+      <div onClick={toggle} style={{ padding: '8px 12px', cursor: 'pointer', fontWeight: 600, fontSize: 13, background: '#eceff1', borderRadius: open ? '8px 8px 0 0' : 8 }}>
+        {open ? '▼' : '▶'} 情報ゲイン根拠データ（投入した事実・競合・IG）
+      </div>
+      {open && (
+        <div style={{ padding: 12, fontSize: 12 }}>
+          {loading && <div className="loading"><div className="spinner" /> 読み込み中...</div>}
+          {ev?.error && <div style={{ color: '#c62828' }}>{ev.error}</div>}
+          {ev && !ev.error && (
+            <>
+              <div style={{ marginBottom: 8 }}><strong>target_query:</strong> {ev.target_query || '—'}</div>
+              {ev.ig && (
+                <div style={{ marginBottom: 10, padding: 8, background: '#fff8e1', borderRadius: 4 }}>
+                  <strong>情報ゲイン:</strong> 競合にあり自記事に無い = エンティティ {ev.ig.layer1_gap_count}件 / 事実 {ev.ig.layer2_gap_count}件
+                  （競合 {ev.ig.competitor_url_count}サイト比較）
+                </div>
+              )}
+              <EvidenceSection title={`注入した追加候補 required_additions (${ra.length}件) — これが diff の根拠`}>
+                {ra.length === 0 ? <li style={{ color: '#999' }}>なし（薄 bundle）</li>
+                  : ra.map((x, i) => <li key={i}>{x.layer ? `[L${x.layer}] ` : ''}{x.text || (typeof x === 'string' ? x : JSON.stringify(x))}</li>)}
+              </EvidenceSection>
+              <EvidenceSection title={`競合コーパス (${ev.competitors?.length || 0}サイト)`}>
+                {(ev.competitors || []).map((c, i) => (
+                  <li key={i} style={{ marginBottom: 6 }}>
+                    <a href={c.competitor_url} target="_blank" rel="noreferrer">#{c.rank_position} {c.competitor_url}</a>
+                    <div style={{ color: '#666' }}>エンティティ: {c.layer1.join('、') || '—'}</div>
+                    <div style={{ color: '#666' }}>事実: {c.layer2.slice(0, 8).join(' / ') || '—'}{c.layer2.length > 8 ? ` …他${c.layer2.length - 8}件` : ''}</div>
+                  </li>
+                ))}
+              </EvidenceSection>
+              <EvidenceSection title={`自記事の抽出 fact (${ev.self_facts?.length || 0}件)`}>
+                {(ev.self_facts || []).slice(0, 40).map((f, i) => <li key={i}>[L{f.layer}] {f.content}</li>)}
+              </EvidenceSection>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionDetail({ sessionId, showToast, onJudged }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -519,6 +590,8 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
           )}
         </div>
       )}
+
+      <EvidencePanel sessionId={sessionId} />
 
       {detail.diffs.length === 0 ? (
         <div className="loading">このセッションには diff がありません</div>

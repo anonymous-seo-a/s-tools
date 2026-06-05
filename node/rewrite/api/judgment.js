@@ -257,6 +257,58 @@ function fetchSessionDetail(id) {
   return { ...session, cost_total_usd: sessionCostUsd(session), diffs: diffsWithBlocks };
 }
 
+// セッションの「情報ゲイン根拠データ」を集約して返す (UI で投入事実を全確認するため)。
+//   - bundle: 生成時に注入した required_additions / shallow_* (session.notes のスナップショット)
+//   - competitors: 競合コーパス + 各競合の抽出 fact (layer1/2)
+//   - self_facts: 自記事の抽出 fact
+//   - ig: 情報ゲインスコア (gap 件数 + サンプル)
+function fetchSessionEvidence(id) {
+  const conn = open();
+  const session = conn.prepare(`SELECT id, post_id, genre, notes FROM master_rewrite_session WHERE id=?`).get(id);
+  if (!session) return null;
+  let bundle = null;
+  try { bundle = JSON.parse(session.notes || '{}').bundle || null; } catch { bundle = null; }
+  const qfid = bundle?.query_fanout_id ?? null;
+  const targetQuery = bundle?.target_query ?? null;
+
+  const parseSnap = (s) => { try { return JSON.parse(s || 'null'); } catch { return null; } };
+
+  const competitors = qfid == null ? [] : conn.prepare(
+    `SELECT competitor_url, rank_position, fact_set_snapshot
+     FROM master_competitor_corpus WHERE query_fanout_id=? ORDER BY rank_position`
+  ).all(qfid).map((r) => {
+    const snap = parseSnap(r.fact_set_snapshot) || {};
+    return {
+      competitor_url: r.competitor_url, rank_position: r.rank_position,
+      layer1: Array.isArray(snap.layer1) ? snap.layer1 : [],
+      layer2: Array.isArray(snap.layer2) ? snap.layer2 : [],
+    };
+  });
+
+  const selfFacts = conn.prepare(
+    `SELECT layer, content, source_url FROM master_fact_set WHERE post_id=? ORDER BY layer, id`
+  ).all(session.post_id);
+
+  let ig = null;
+  if (targetQuery != null) {
+    ig = conn.prepare(
+      `SELECT layer1_gap_count, layer2_gap_count, competitor_url_count, notes, calculated_at
+       FROM master_information_gain_score WHERE post_id=? AND target_query=? ORDER BY id DESC LIMIT 1`
+    ).get(session.post_id, targetQuery) || null;
+    if (ig) { ig.gap_samples = parseSnap(ig.notes)?.gap_fact_samples ?? null; delete ig.notes; }
+  }
+
+  return {
+    session_id: id, post_id: session.post_id, genre: session.genre, target_query: targetQuery,
+    bundle: bundle ? {
+      required_additions: bundle.required_additions || [],
+      shallow_queries: bundle.shallow_queries || [],
+      shallow_facts: bundle.shallow_facts || [],
+    } : null,
+    ig, competitors, self_facts: selfFacts,
+  };
+}
+
 function updateDiffJudgment(id, { judgment, reject_reason, reject_note, edit_content }) {
   const conn = open();
   const existing = conn.prepare(`SELECT * FROM master_rewrite_diff WHERE id = ?`).get(id);
@@ -325,6 +377,21 @@ function buildRouter() {
       return res.json(detail);
     } catch (e) {
       console.error('[GET /judgment/sessions/:id]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/rewrite/judgment/sessions/:id/evidence
+  //   情報ゲイン根拠 (bundle / 競合 fact / 自記事 fact / IG) を集約して返す。
+  router.get('/sessions/:id/evidence', (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
+      const ev = fetchSessionEvidence(id);
+      if (!ev) return res.status(404).json({ error: 'session not found', id });
+      return res.json(ev);
+    } catch (e) {
+      console.error('[GET /judgment/sessions/:id/evidence]', e);
       return res.status(500).json({ error: e.message });
     }
   });
