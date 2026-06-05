@@ -16,6 +16,17 @@ const JUDGMENT_BADGE = {
   rejected: 'rejected',
 };
 
+// 却下理由プリセット (学習ループで集計可能にするため固定値)。値=保存テキスト。
+const REJECT_REASONS = [
+  '規制違反',
+  '主題ずれ',
+  '事実誤り',
+  '冗長・不要',
+  '改変が不十分',
+  '構成を崩す',
+  'その他',
+];
+
 function fmtDate(s) {
   if (!s) return '—';
   return new Date(s.replace(' ', 'T') + 'Z').toLocaleString('ja-JP');
@@ -93,9 +104,13 @@ function DiffCard({ diff, onJudge, busyId }) {
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectNote, setRejectNote] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
 
   const isBusy = busyId === diff.id;
   const badgeClass = JUDGMENT_BADGE[diff.daiki_judgment] || 'pending';
+  // 適用される実コンテンツ: Daiki 編集があればそれ、なければ LLM の content_after
+  const effectiveAfter = diff.daiki_edit_content || diff.content_after || '';
 
   const handleApprove = () => onJudge(diff.id, { judgment: 'approved' });
   const handleStartReject = () => {
@@ -110,6 +125,18 @@ function DiffCard({ diff, onJudge, busyId }) {
       reject_note: rejectNote || null,
     });
     setRejecting(false);
+  };
+  const handleStartEdit = () => {
+    setEditContent(effectiveAfter);
+    setEditing(true);
+  };
+  const handleConfirmEdit = () => {
+    // 編集内容で承認 (空なら edit_content を送らず通常承認)
+    onJudge(diff.id, {
+      judgment: 'approved',
+      edit_content: editContent.trim() ? editContent : null,
+    });
+    setEditing(false);
   };
   const handleResetPending = () => onJudge(diff.id, { judgment: 'pending' });
 
@@ -146,12 +173,15 @@ function DiffCard({ diff, onJudge, busyId }) {
           }}>{diff.content_before || '(なし)'}</pre>
         </div>
         <div>
-          <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>AFTER</div>
+          <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
+            AFTER{diff.daiki_edit_content ? ' (Daiki 編集済 — これが適用される)' : ''}
+          </div>
           <pre style={{
-            background: '#f1f8e9', border: '1px solid #dcedc8', borderRadius: 6,
+            background: diff.daiki_edit_content ? '#e3f2fd' : '#f1f8e9',
+            border: `1px solid ${diff.daiki_edit_content ? '#bbdefb' : '#dcedc8'}`, borderRadius: 6,
             padding: 8, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             maxHeight: 240, overflow: 'auto', margin: 0,
-          }}>{diff.content_after || '(なし)'}</pre>
+          }}>{effectiveAfter || '(なし)'}</pre>
         </div>
       </div>
 
@@ -166,34 +196,58 @@ function DiffCard({ diff, onJudge, busyId }) {
 
       {rejecting && (
         <div style={{ marginTop: 8, padding: 10, background: '#fff3e0', borderRadius: 6 }}>
-          <div style={{ fontSize: 12, marginBottom: 6 }}>却下理由 (任意):</div>
-          <input
+          <div style={{ fontSize: 12, marginBottom: 4 }}>却下理由 (必須):</div>
+          <select
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
-            placeholder="例: regulation_violation / off_topic / factually_wrong"
-            style={{ marginBottom: 6 }}
-          />
+            style={{ marginBottom: 6, width: '100%' }}
+          >
+            <option value="">— 理由を選択 —</option>
+            {REJECT_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
           <textarea
             rows={2}
             value={rejectNote}
             onChange={(e) => setRejectNote(e.target.value)}
-            placeholder="補足メモ (任意)"
+            placeholder="詳細メモ (任意): どの記述が問題か / 望ましい修正方針"
+            style={{ width: '100%' }}
           />
           <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-            <button className="btn-reject btn-small" onClick={handleConfirmReject} disabled={isBusy}>却下確定</button>
+            <button className="btn-reject btn-small" onClick={handleConfirmReject} disabled={isBusy || !rejectReason}>却下確定</button>
             <button className="btn-secondary btn-small" onClick={() => setRejecting(false)} disabled={isBusy}>キャンセル</button>
+          </div>
+        </div>
+      )}
+
+      {editing && (
+        <div style={{ marginTop: 8, padding: 10, background: '#e3f2fd', borderRadius: 6 }}>
+          <div style={{ fontSize: 12, marginBottom: 4 }}>
+            AFTER を編集して承認 (この HTML がそのまま WP に適用される。空にすると LLM 原案で承認):
+          </div>
+          <textarea
+            rows={8}
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
+          />
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <button className="btn-approve btn-small" onClick={handleConfirmEdit} disabled={isBusy}>編集を承認</button>
+            <button className="btn-secondary btn-small" onClick={() => setEditing(false)} disabled={isBusy}>キャンセル</button>
           </div>
         </div>
       )}
 
       <div className="result-actions" style={{ marginTop: 10 }}>
         {diff.daiki_judgment !== 'approved' && (
-          <button className="btn-approve btn-small" onClick={handleApprove} disabled={isBusy || rejecting}>承認</button>
+          <button className="btn-approve btn-small" onClick={handleApprove} disabled={isBusy || rejecting || editing}>承認</button>
         )}
-        {diff.daiki_judgment !== 'rejected' && !rejecting && (
+        {!rejecting && !editing && (
+          <button className="btn-secondary btn-small" onClick={handleStartEdit} disabled={isBusy}>編集して承認</button>
+        )}
+        {diff.daiki_judgment !== 'rejected' && !rejecting && !editing && (
           <button className="btn-reject btn-small" onClick={handleStartReject} disabled={isBusy}>却下</button>
         )}
-        {diff.daiki_judgment !== 'pending' && !rejecting && (
+        {diff.daiki_judgment !== 'pending' && !rejecting && !editing && (
           <button className="btn-secondary btn-small" onClick={handleResetPending} disabled={isBusy}>未判定に戻す</button>
         )}
       </div>

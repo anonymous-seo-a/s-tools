@@ -6,7 +6,10 @@ async function request(path, options = {}) {
     ...options,
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  // 空ボディ (204 / 空 200) で res.json() が "Unexpected end of JSON input" を投げ、
+  // 成功を parse エラーに化かすのを防ぐ。
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
 }
 
 export const api = {

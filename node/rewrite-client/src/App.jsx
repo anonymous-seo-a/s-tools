@@ -5,8 +5,20 @@ import RewriteQueueView from './RewriteQueueView';
 import RewriteJudgmentView from './RewriteJudgmentView';
 
 function Toast({ message, type, onClose }) {
-  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
-  return <div className={`toast ${type}`}>{message}</div>;
+  // エラーは自動消滅させない (500 本文など長文を読み切れるように)。クリックで閉じる。
+  useEffect(() => {
+    if (type === 'error') return undefined;
+    const t = setTimeout(onClose, 3000);
+    return () => clearTimeout(t);
+  }, [onClose, type]);
+  return (
+    <div
+      className={`toast ${type}`}
+      onClick={onClose}
+      title="クリックで閉じる"
+      style={{ cursor: 'pointer', whiteSpace: 'pre-wrap', maxWidth: 480, wordBreak: 'break-word' }}
+    >{message}</div>
+  );
 }
 
 const TABS = [
