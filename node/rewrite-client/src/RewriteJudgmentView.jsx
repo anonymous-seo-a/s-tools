@@ -17,6 +17,15 @@ const GENRE_OPTIONS = [
 ];
 const GENRE_LABEL = { cardloan: 'カードローン', securities: '証券' };
 
+// rationale.primary_source を人間可読ラベルへ
+const PRIMARY_SOURCE_LABEL = {
+  fact_set_required_addition: '競合にあり自記事に無い事実の追加',
+  embedding_shallow_query: '競合より網羅が浅いクエリ領域の強化',
+  embedding_shallow_fact: '浅い事実記述の深掘り',
+  hcu_violation: 'HCU(有用性)観点の改善',
+  compliance_rule: '規制・コンプラ対応',
+};
+
 const JUDGMENT_BADGE = {
   pending:  'pending',
   approved: 'approved',
@@ -77,6 +86,32 @@ function SessionRow({ s, selected, onSelect }) {
       <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtCost(s.cost_total_usd)}</td>
       <td style={{ padding: '8px 12px', fontSize: 12, color: '#888' }}>{fmtDate(s.started_at)}</td>
     </tr>
+  );
+}
+
+// rationale JSON を自然言語で表示 (なぜこの diff か)。
+function RationaleNote({ rationale }) {
+  let p = rationale;
+  if (typeof rationale === 'string') {
+    try { p = JSON.parse(rationale); }
+    catch { return rationale ? <div className="result-reason" style={{ marginTop: 6 }}>{rationale}</div> : null; }
+  }
+  if (!p || typeof p !== 'object') return null;
+  const ann = Array.isArray(p.compliance?.sonnet_annotations) ? p.compliance.sonnet_annotations.filter(Boolean) : [];
+  const reason = ann.join(' ');
+  const srcLabel = PRIMARY_SOURCE_LABEL[p.primary_source] || p.primary_source || '';
+  const ymyl = Array.isArray(p.compliance?.ymyl_requirements_met) ? p.compliance.ymyl_requirements_met : [];
+  if (!reason && !srcLabel) return null;
+  return (
+    <div style={{ marginTop: 6, padding: 8, background: '#f5f7fa', borderLeft: '3px solid #90a4ae', borderRadius: 4, fontSize: 12 }}>
+      {reason && <div><strong>リライト理由:</strong> {reason}</div>}
+      {(srcLabel || ymyl.length > 0) && (
+        <div style={{ marginTop: reason ? 4 : 0, color: '#78909c', fontSize: 11 }}>
+          {srcLabel && <span>種別: {srcLabel}</span>}
+          {ymyl.length > 0 && <span style={{ marginLeft: 8 }}>YMYL: {ymyl.join(' / ')}</span>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -171,9 +206,7 @@ function DiffCard({ diff, onJudge, busyId }) {
         </div>
       </div>
 
-      {diff.rationale && (
-        <div className="result-reason" style={{ marginTop: 6 }}>{diff.rationale}</div>
-      )}
+      {diff.rationale && <RationaleNote rationale={diff.rationale} />}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 10 }}>
         <div>
