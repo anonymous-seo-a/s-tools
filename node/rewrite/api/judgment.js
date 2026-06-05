@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const cheerio = require('cheerio');
 const { open } = require('../db');
 const { runComplianceCheck } = require('../llm-execution/compliance-runner');
 const { runAnalysis } = require('../llm-execution/analysis-runner');
@@ -102,30 +103,101 @@ async function runGenerationPipeline(job, conn) {
 
 const APPLY_MIN_CONTENT_BEFORE_LEN = 50; // これ未満は LLM hallucination 推定で拒否
 
-function decodeHtmlEntities(s) {
-  return s
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)))
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#?(\w+);/g, (m, e) => ({ apos: "'", nbsp: ' ' }[e] || m));
-}
-
 async function fetchWpPost(postId) {
   const raw = (process.env.WP_API_BASE_URL || '').replace(/\/$/, '');
   if (!raw) throw new Error('WP_API_BASE_URL not set');
   const base = raw.endsWith('/wp-json/wp/v2') ? raw : `${raw}/wp-json/wp/v2`;
-  // context=edit は Application Password の権限で 401 になり得る。
-  // context=view (default) の content.rendered を取得 + entity decode で extractSelfArticle の raw_html_block と一致させる。
   const url = `${base}/posts/${postId}`;
   const auth = Buffer.from(`${process.env.WP_API_USERNAME}:${process.env.WP_API_APP_PASSWORD}`).toString('base64');
   const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
   if (!res.ok) throw new Error(`WP fetch ${postId}: HTTP ${res.status}`);
   const p = await res.json();
-  const rendered = p.content?.rendered || '';
-  return { title: p.title?.rendered || '', content_raw: decodeHtmlEntities(rendered) };
+  return { title: p.title?.rendered || '', content_rendered: p.content?.rendered || '' };
+}
+
+const HEADINGS = 'h1,h2,h3,h4';
+
+// 差分生成時 (diff-runner) は content.rendered を extractSelfArticle に通し、h*# diff の
+// content_before を section の raw_html_block (= 見出しタグ + 次見出し直前までの兄弟要素を
+// $.html(node) で連結、要素間テキストノードは nextUntil が除外) で上書きしている。
+// apply step は同じ cheerio パイプラインで WP content.rendered を読み、各見出しから
+// raw_html_block を再構築して content_before と完全一致する section だけを置換対象にする。
+// 文字列 substring 照合は不可 ($('body').html() は要素間 \n を含むため raw_html_block と不一致)。
+//
+// 注意: extractSelfArticle は script/style/noscript を *除去してから* section を組むため
+// raw_html_block にはそれらが含まれない。一方 apply は最終的に $('body').html() を WP へ
+// push するので、ここで script/style を除去すると記事本文のインライン script/style が
+// 適用時に永久消失する (YMYL 記事でデータ損失)。よって DOM 上は残し、照合ブロックの
+// 再構築時のみ script/style/noscript を除外して content_before とのパリティを保つ。
+const SKIP_TAGS = new Set(['script', 'style', 'noscript']);
+
+function buildDom(contentRendered) {
+  return cheerio.load(contentRendered || '', { decodeEntities: true });
+}
+
+function reconstructBlock($, $h) {
+  // 置換対象 span は次見出し直前までの全兄弟 (script/style 含む = remove 対象)。
+  const $body = $h.nextUntil(HEADINGS);
+  // 照合用 html は extractSelfArticle と同様 script/style/noscript を除外して連結。
+  const compareNodes = $body.toArray().filter((n) => !SKIP_TAGS.has(n.tagName?.toLowerCase()));
+  const html = $.html($h) + compareNodes.map((n) => $.html(n)).join('');
+  return { html, $body };
+}
+
+// planApply: 現 DOM に対し置換対象を確定。DOM は変更しない (node 参照のみ ops に退避)。
+//   planned[] は JSON 返却用 (plain field のみ)、ops は server side で apply 時に使う。
+function planApply($, diffs) {
+  const planned = [];
+  const skipped = [];
+  const ops = new Map();
+  for (const d of diffs) {
+    if (d.daiki_judgment !== 'approved') {
+      skipped.push({ diff_id: d.id, reason: `not approved (${d.daiki_judgment})` });
+      continue;
+    }
+    const before = (d.content_before || '').trim();
+    const after = d.daiki_edit_content || d.content_after || '';
+    if (before.length < APPLY_MIN_CONTENT_BEFORE_LEN) {
+      skipped.push({ diff_id: d.id, reason: `content_before too short (${before.length}c, hallucination?)` });
+      continue;
+    }
+    if (!after) {
+      skipped.push({ diff_id: d.id, reason: 'content_after empty' });
+      continue;
+    }
+    if (!/^h[1-4]#.+/.test((d.target_section || '').trim())) {
+      // meta:* / p#… / outline:* は本文 section 置換の対象外 (別経路で解決)。
+      skipped.push({ diff_id: d.id, reason: `target_section not a body heading (${d.target_section})` });
+      continue;
+    }
+    // 現 HTML の見出しから raw_html_block を再構築し、content_before と完全一致する section を探す。
+    let matched = null;
+    $(HEADINGS).each((_, el) => {
+      if (matched) return;
+      const $h = $(el);
+      const { html, $body } = reconstructBlock($, $h);
+      if (html === before) matched = { $h, $body };
+    });
+    if (!matched) {
+      skipped.push({ diff_id: d.id, reason: 'section not found / drifted (content_before mismatch)' });
+      continue;
+    }
+    planned.push({ diff_id: d.id, target_section: d.target_section, before_len: before.length, after_len: after.length });
+    ops.set(d.id, { $h: matched.$h, $body: matched.$body, after });
+  }
+  return { planned, skipped, ops };
+}
+
+// applyOps: planApply で確定した node を置換。$body 兄弟は plan 時点で捕捉済のため、
+//   他 section の置換による兄弟構成変化の影響を受けない。返り値は更新後の body inner。
+function applyOps($, planned, ops) {
+  for (const p of planned) {
+    const op = ops.get(p.diff_id);
+    if (!op) throw new Error(`apply: missing op for diff #${p.diff_id}`);
+    op.$body.remove();
+    op.$h.replaceWith(op.after);
+  }
+  return $('body').html() || '';
 }
 
 async function updateWpPost(postId, contentHtml) {
@@ -143,47 +215,6 @@ async function updateWpPost(postId, contentHtml) {
     throw new Error(`WP update ${postId}: HTTP ${res.status} ${t.slice(0, 200)}`);
   }
   return res.json();
-}
-
-function planApply({ session, diffs, wpContent }) {
-  // approved diff だけ、かつ content_before が安全長以上、かつ WP に含まれる、を planned に
-  const planned = [];
-  const skipped = [];
-  for (const d of diffs) {
-    if (d.daiki_judgment !== 'approved') {
-      skipped.push({ diff_id: d.id, reason: `not approved (${d.daiki_judgment})` });
-      continue;
-    }
-    const before = (d.content_before || '').trim();
-    const after = d.daiki_edit_content || d.content_after || '';
-    if (before.length < APPLY_MIN_CONTENT_BEFORE_LEN) {
-      skipped.push({ diff_id: d.id, reason: `content_before too short (${before.length}c, hallucination?)` });
-      continue;
-    }
-    if (!after) {
-      skipped.push({ diff_id: d.id, reason: 'content_after empty' });
-      continue;
-    }
-    if (!wpContent.includes(before)) {
-      skipped.push({ diff_id: d.id, reason: 'content_before not found in WP content' });
-      continue;
-    }
-    planned.push({ diff_id: d.id, target_section: d.target_section, before_len: before.length, after_len: after.length });
-  }
-  return { planned, skipped };
-}
-
-function applyDiffsToHtml(html, diffs) {
-  let out = html;
-  for (const d of diffs) {
-    const before = (d.content_before || '').trim();
-    const after = d.daiki_edit_content || d.content_after || '';
-    // first occurrence のみ置換 (重複時の暴走防止)
-    const idx = out.indexOf(before);
-    if (idx < 0) throw new Error(`apply: content_before not found for diff #${d.id}`);
-    out = out.slice(0, idx) + after + out.slice(idx + before.length);
-  }
-  return out;
 }
 
 const VALID_SESSION_STATUSES = new Set([
@@ -383,6 +414,19 @@ function buildRouter() {
           job.status = 'failed';
           job.error = e.message || String(e);
           console.error(`[generation job ${job_id}]`, e);
+          // DB セッションを failed に落とす (これをしないと analyzing/generating で永久ストール、
+          // UI から復旧不能になる)。session INSERT 前の失敗時は session_id=null なので skip。
+          if (job.session_id) {
+            try {
+              open().prepare(
+                `UPDATE master_rewrite_session
+                 SET status='failed', notes=json_set(COALESCE(NULLIF(notes,''),'{}'), '$.pipeline_error', ?)
+                 WHERE id=?`
+              ).run(job.error, job.session_id);
+            } catch (e2) {
+              console.error(`[generation job ${job_id}] failed to mark session failed:`, e2.message);
+            }
+          }
         } finally {
           job.completed_at = new Date().toISOString();
         }
@@ -446,7 +490,8 @@ function buildRouter() {
          FROM master_rewrite_diff WHERE session_id=? ORDER BY diff_order`
       ).all(id);
       const wp = await fetchWpPost(session.post_id);
-      const plan = planApply({ session, diffs, wpContent: wp.content_raw });
+      const $ = buildDom(wp.content_rendered);
+      const plan = planApply($, diffs);
 
       if (plan.planned.length === 0) {
         return res.json({
@@ -463,15 +508,15 @@ function buildRouter() {
         });
       }
 
-      // 実適用
+      // 実適用。snapshot は WP から取得した raw content.rendered をそのまま保存する。
+      // (cheerio 再直列化後の body inner ではなく原本を保存 → rollback で完全復元)
       conn.prepare(
         `UPDATE master_rewrite_session
          SET wp_snapshot_before_apply=?, wp_apply_started_at=CURRENT_TIMESTAMP
          WHERE id=?`
-      ).run(wp.content_raw, id);
+      ).run(wp.content_rendered || '', id);
 
-      const plannedDiffs = diffs.filter((d) => plan.planned.some((p) => p.diff_id === d.id));
-      const newHtml = applyDiffsToHtml(wp.content_raw, plannedDiffs);
+      const newHtml = applyOps($, plan.planned, plan.ops);
       await updateWpPost(session.post_id, newHtml);
 
       conn.prepare(
@@ -630,4 +675,6 @@ module.exports = {
   fetchSessions,
   fetchSessionDetail,
   updateDiffJudgment,
+  // test 用に apply engine を公開 (HTTP 経路を介さず純粋ロジックを検証可能にする)
+  _applyEngine: { buildDom, planApply, applyOps },
 };
