@@ -125,6 +125,19 @@ risk_flag     : null または ${RISK_FLAGS.join(' / ')}
 対象ジャンル固有の禁止表現は user プロンプトの「対象ジャンル / YMYL 制約」に列挙する。
 そこに挙がる表現を content_after に絶対に含めない (違反 diff は生成禁止)。
 
+# 事実の durability (時間で陳腐化する情報は追加しない)
+- 株価・前日比・当日の市況・時価総額・配当利回りの具体数値・特定銘柄の現在値など、
+  日々変動する/すぐ古くなる値は content_after に追加しない。
+- 特定銘柄を「おすすめ」として断定的に列挙しない (YMYL: 断定的判断の提供の禁止)。
+- 追加するのは普遍的・構造的な事実のみ: 選び方の観点・判断基準、制度・ルール、手順、
+  分類、用語の定義、長期的に有効な数値 (制度上の上限額等)。
+
+# 文体 (既存記事を踏襲)
+- content_before (元の本文) の文体・語り口・粒度・である/ですます調を踏襲する。
+- 生成AIにありがちな冗長・説明調の定型表現を避ける。例: 「〜という点が重要です」
+  「〜につながります」「〜を意識しましょう」「初心者がまず意識すべき理由：」のような
+  説明ラベルや、当たり前の一般論の水増しを書かない。元記事の簡潔さに合わせる。
+
 # risk_flag 自動判定 (LLM 自己申告)
 - title_change       : change_type='update_title' または title 文言変更
 - major_restructure  : change_type='restructure_outline' / 'delete_section' / h2 順序変更
@@ -195,15 +208,20 @@ ${renderArticleView(article_view)}`);
 
   if (Array.isArray(citation_sources) && citation_sources.length > 0) {
     const list = citation_sources.map((s) => `- [${s.type}] ${s.url}`).join('\n');
-    sections.push(`# 出典源プール (信頼できる引用先)
-追加・修正した事実が下記の公式/政府ソースで裏付けられる場合、その diff の content_after に
-出典リンクを付与してよい (E-E-A-T 信頼性向上)。形式:
+    sections.push(`# 出典源プール (引用先 URL。gov/official 優先)
+追加・修正した事実を出典付きで補強する場合、下記形式で**必ず実リンク**を付ける:
 <!-- wp:quote -->
 <blockquote class="wp-block-quote"><!-- wp:paragraph -->
-<p><a href="URL" target="_blank" rel="noopener">出典: サイト名</a></p>
+<p><a href="(下記プールのURL)" target="_blank" rel="noopener">出典: サイト名</a></p>
 <!-- /wp:paragraph --></blockquote>
 <!-- /wp:quote -->
-**URL は必ず下記プールから選ぶこと。URL を創作してはならない。該当ソースが無ければ出典を付けない。**
+
+【出典の絶対ルール】
+- 出典・情報源に言及するなら、必ず上記形式の <a href> 実リンクにすること。
+- **リンクを伴わない出典言及は禁止**。「みんかぶ等を参考に」「〜のデータによると」「〜時点」
+  「出典時点：」等の、URL リンクの無いプレーンテキストの出典表記を出力してはならない。
+- URL は必ず下記プールから選ぶ (創作禁止)。該当 URL が無い情報には出典に一切言及せず、
+  通常の本文として書くこと (gov/official を優先的に引用)。
 ${list}`);
   }
 

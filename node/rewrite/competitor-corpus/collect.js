@@ -30,7 +30,7 @@ const EXCLUDE_DOMAIN_SUFFIXES = [
   // 証券 企業公式 (メディアではない)
   'rakuten-sec.co.jp', 'sbisec.co.jp', 'sbineotrade.jp', 'daiwa.jp', 'monex.co.jp',
   'matsui.co.jp', 'nomura.co.jp', 'smbcnikko.co.jp', 'tokaitokyo.co.jp',
-  'okasan-online.co.jp', 'gmo-click.com', 'click-sec.com', 'auone-kabu.jp',
+  'okasan-online.co.jp', 'okasan.co.jp', 'gmo-click.com', 'click-sec.com', 'auone-kabu.jp',
   'rakuten.co.jp', 'sbigroup.co.jp',
   // カードローン 企業公式
   'acom.co.jp', 'promise.co.jp', 'aiful.co.jp', 'mobit.ne.jp', 'smbc-cf.com',
@@ -60,7 +60,7 @@ function classifyDomain(url) {
 
 // 既定 mediaOnly=false: SERP 上位全部を IG 源にする (= 順位の ground truth)。
 // mediaOnly=true は「メディアが上位に居るか」のターゲット選定信号用途。
-async function collectCompetitorCorpus(query_fanout_id, { topN = 3, excludeDomains = [], mediaOnly = false } = {}) {
+async function collectCompetitorCorpus(query_fanout_id, { topN = 5, excludeDomains = [], mediaOnly = false } = {}) {
   const conn = db.open();
   const parent = conn
     .prepare('SELECT id, sub_query FROM master_query_fanout WHERE id=?')

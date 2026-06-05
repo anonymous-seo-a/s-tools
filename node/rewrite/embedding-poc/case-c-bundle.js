@@ -32,6 +32,15 @@
 
 const db = require('../db');
 
+// 揮発性(時間で陳腐化する/銘柄個別の市況)事実を除外する判定。
+// evergreen 記事に株価・前日比・銘柄コード・日付依存の値を入れさせないための durability フィルタ。
+// ※ NISA 枠「1,800万円」等の普遍的な閾値を誤除外しないよう、株価/銘柄コード/日付/時点に限定。
+const VOLATILE_FACT_RE = /株価|前日比|始値|終値|出来高|時価総額|現在値|終値ベース|[(（]\s*\d{3,4}[0-9a-zA-Z]?\s*[)）]|\d{4}\s*[年/]\s*\d{1,2}\s*[月/]\s*\d{1,2}|\d{1,2}\s*時\s*\d{1,2}\s*分時点|時点で(?:の|は)?\s*\d|本日|当日終値/;
+
+function isVolatileFact(text) {
+  return VOLATILE_FACT_RE.test(text || '');
+}
+
 function loadFactsetGapSamples(conn, { post_id, target_query }) {
   const ig = conn
     .prepare(
@@ -51,11 +60,13 @@ function loadFactsetGapSamples(conn, { post_id, target_query }) {
   }
 
   const rows = [];
+  let volatile_excluded = 0;
   for (const layer of [1, 2, 3]) {
     const arr = notes?.gap_fact_samples?.[`layer${layer}`];
     if (Array.isArray(arr)) {
       for (const text of arr) {
         if (typeof text === 'string' && text.trim()) {
+          if (isVolatileFact(text)) { volatile_excluded++; continue; } // durability: 揮発性事実は注入しない
           rows.push({ layer, text: text.trim() });
         }
       }
@@ -67,6 +78,7 @@ function loadFactsetGapSamples(conn, { post_id, target_query }) {
     ig_id: ig.id,
     total_gap_count: (ig.layer1_gap_count || 0) + (ig.layer2_gap_count || 0),
     layer3_gain_score: ig.layer3_gain_score || 0,
+    volatile_excluded,
   };
 }
 

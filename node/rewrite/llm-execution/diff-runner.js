@@ -161,12 +161,13 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
   const articleView = buildRunStructuredView(wp.content_raw);
   const resolveRun = makeRunResolver(articleView);
 
-  // 出典源プール: 競合コーパスのうち official/gov を信頼できる引用先として LLM に渡す。
+  // 出典源プール: 競合コーパス全件 (種別タグ付き)。出典に言及する場合は必ずこの URL へリンクさせる
+  // (プレーンテキスト出典を禁止する)。gov/official を優先引用先として提示。
   const citationSources = (bundle.query_fanout_id == null ? [] : conn.prepare(
     `SELECT competitor_url FROM master_competitor_corpus WHERE query_fanout_id=?`
   ).all(bundle.query_fanout_id))
     .map((r) => ({ url: r.competitor_url, type: classifyDomain(r.competitor_url) }))
-    .filter((s) => s.type === 'gov' || s.type === 'official');
+    .sort((a, b) => ({ gov: 0, official: 1, media: 2 }[a.type] - { gov: 0, official: 1, media: 2 }[b.type]));
 
   const userPrompt = buildDiffUserPrompt({
     post_id: session.post_id,
