@@ -34,6 +34,17 @@ const SAFE_BLOCK_TYPES = new Set([
 // content_before(run markup) に紛れていてはいけない保護ブロックの検出 (run 分割不正の防御)。
 const PROTECTED_MARKUP_RE = /<!--\s*wp:(?:block|image|html|embed|shortcode)\b|<!--\s*wp:[a-z0-9-]+\//;
 
+// 外部リンク (出典/参照) を含むブロックは絶対に書き換え・削除しない = run から除外して保護する。
+const EXTERNAL_LINK_RE = /<a\s[^>]*href\s*=\s*["']https?:\/\//i;
+function hasExternalLink(markup) {
+  return EXTERNAL_LINK_RE.test(markup || '');
+}
+
+// run を構成できる「編集可能ブロック」か。外部リンク含有ブロック(出典)は除外し保護する。
+function isEditableBlock(b) {
+  return !b.isProtected && b.type !== 'heading' && SAFE_BLOCK_TYPES.has(b.type) && !hasExternalLink(b.markup);
+}
+
 // ─────────────────────────────────────────────────────────────
 // Gutenberg ブロックパーサ (top-level、入れ子は深さで1ブロックに畳む)
 // ─────────────────────────────────────────────────────────────
@@ -146,8 +157,7 @@ function segmentSectionRuns(raw, blocks, headingIdx) {
   };
   for (let i = headingIdx + 1; i <= endIdx; i++) {
     const b = blocks[i];
-    const editable = !b.isProtected && b.type !== 'heading' && SAFE_BLOCK_TYPES.has(b.type);
-    if (editable) cur.push(b); else flush();
+    if (isEditableBlock(b)) cur.push(b); else flush();
   }
   flush();
   return runs;
@@ -197,9 +207,12 @@ function buildRunStructuredView(raw) {
     };
     for (let j = i + 1; j <= endIdx; j++) {
       const b = blocks[j];
-      const editable = !b.isProtected && b.type !== 'heading' && SAFE_BLOCK_TYPES.has(b.type);
-      if (editable) cur.push(b);
-      else { flush(); items.push({ kind: 'protected', type: b.type, label: protectedLabel(b.type) }); }
+      if (isEditableBlock(b)) cur.push(b);
+      else {
+        flush();
+        const label = hasExternalLink(b.markup) ? '出典/参照リンク(編集不可)' : protectedLabel(b.type);
+        items.push({ kind: 'protected', type: b.type, label });
+      }
     }
     flush();
     sections.push({ target_section: `h${h.headingLevel}#${h.headingText}`, level: h.headingLevel, heading: h.headingText, items, runs });
@@ -340,6 +353,11 @@ function planGutenbergApply(raw, diffs) {
     }
     if (PROTECTED_MARKUP_RE.test(before)) {
       skipped.push({ diff_id: d.id, reason: 'content_before に保護ブロックが含まれる (run 分割不正) → skip' });
+      continue;
+    }
+    if (hasExternalLink(before)) {
+      // 出典/参照リンクを含む範囲は絶対に書き換えない (リンク消失防止)。
+      skipped.push({ diff_id: d.id, reason: 'content_before に外部リンク(出典)が含まれる → 保護のため skip' });
       continue;
     }
     const sectionEnd = blocks[endIdx].end;
