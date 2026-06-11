@@ -172,6 +172,9 @@ export const api = {
   getQueryFanouts: () =>
     request('/api/rewrite/judgment/query-fanouts'),
 
+  // 効果測定 (適用前後の順位比較、読み取り専用)
+  getRewriteMeasurement: () => request('/api/rewrite/measurement'),
+
   // β-2: WP 適用 (dry-run / 本適用 / ロールバック)
   applySession: (sessionId, { dryRun = false } = {}) =>
     request(`/api/rewrite/judgment/sessions/${sessionId}/apply`, {
