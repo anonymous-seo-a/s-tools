@@ -55,13 +55,14 @@ console.log(`=== source: post_id=${ig.post_id} query_fanout_id=${ig.qf_id} Q[i]=
 // === 1. 一時 session INSERT ===
 console.log('=== 1. 一時 session INSERT ===');
 conn.pragma('foreign_keys = ON');
+const llmModels = require('../../shared/llm-adapters/anthropic-adapter').getModels();
 const sessionInsert = conn
   .prepare(
     `INSERT INTO master_rewrite_session
        (post_id, model_analysis, model_generation, triggered_by, status)
      VALUES (?, ?, ?, ?, ?)`
   )
-  .run(ig.post_id, 'claude-opus-4-7', 'claude-sonnet-4-6', 'smoke-test', 'planned');
+  .run(ig.post_id, llmModels.analysis, llmModels.generation, 'smoke-test', 'planned');
 const session_id = sessionInsert.lastInsertRowid;
 console.log(`  session_id=${session_id}`);
 

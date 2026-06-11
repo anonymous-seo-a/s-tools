@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Smoke test: shared/llm-adapters/anthropic-adapter
- *   1+1=? を Sonnet 4.6 に投げて疎通確認。
+ *   1+1=? を generation ロールの現行モデルに投げて疎通確認。
  */
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 
-const { sonnet, MODEL_SONNET } = require('../../shared/llm-adapters/anthropic-adapter');
+const { sonnet, getModels } = require('../../shared/llm-adapters/anthropic-adapter');
 
 (async () => {
   const t0 = Date.now();
@@ -18,7 +18,7 @@ const { sonnet, MODEL_SONNET } = require('../../shared/llm-adapters/anthropic-ad
   const elapsed = Date.now() - t0;
 
   console.log('--- smoke-anthropic-adapter ---');
-  console.log('model:', MODEL_SONNET);
+  console.log('model:', getModels().generation);
   console.log('elapsed:', elapsed, 'ms');
   console.log('text:', result.text);
   console.log('usage:', result.usage);

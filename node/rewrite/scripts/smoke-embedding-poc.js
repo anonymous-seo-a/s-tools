@@ -81,12 +81,13 @@ async function fetchCompetitorHtml(url) {
   conn.pragma('foreign_keys = ON');
 
   // === 1. 一時 session INSERT ===
+  const llmModels = require('../../shared/llm-adapters/anthropic-adapter').getModels();
   const sessionInfo = conn
     .prepare(
       `INSERT INTO master_rewrite_session (post_id, model_analysis, model_generation, triggered_by, status)
-       VALUES (?, 'claude-opus-4-7', 'claude-sonnet-4-6', 'smoke-test', 'planned')`
+       VALUES (?, ?, ?, 'smoke-test', 'planned')`
     )
-    .run(postId);
+    .run(postId, llmModels.analysis, llmModels.generation);
   const sessionId = sessionInfo.lastInsertRowid;
   console.log(`=== smoke session_id=${sessionId} (post=${postId} qf=${queryFanoutId} model=${DEFAULT_MODEL}) ===\n`);
 

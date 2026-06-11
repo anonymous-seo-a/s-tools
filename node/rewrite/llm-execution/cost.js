@@ -8,14 +8,16 @@
  *     smoke 生成分も含め常に正)。Layer2 コストは session token 列に無いため本算出には含まない
  *     (analysis + generation の主コストのみ。Layer2 は job/notes 側で別途記録)。
  *
- * 単価 (USD / 1M tokens、2026 時点):
- *   Opus  4.x : input $15  / output $75
+ * 単価 (USD / 1M tokens、2026-06 時点):
+ *   Fable 5   : input $10  / output $50
+ *   Opus  4.x : input $5   / output $25
  *   Sonnet 4.x: input $3   / output $15
  *   Haiku 4.x : input $1   / output $5
  */
 
 const PRICING = [
-  { prefix: 'claude-opus',   input: 15,  output: 75 },
+  { prefix: 'claude-fable',  input: 10,  output: 50 },
+  { prefix: 'claude-opus',   input: 5,   output: 25 },
   { prefix: 'claude-sonnet', input: 3,   output: 15 },
   { prefix: 'claude-haiku',  input: 1,   output: 5 },
 ];

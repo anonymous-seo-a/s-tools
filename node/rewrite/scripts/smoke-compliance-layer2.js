@@ -75,11 +75,12 @@ function assert(cond, msg) {
 
   // === 1. session INSERT ===
   console.log('\n=== 1. session INSERT ===');
+  const llmModels = require('../../shared/llm-adapters/anthropic-adapter').getModels();
   const info = conn.prepare(
     `INSERT INTO master_rewrite_session
        (post_id, model_analysis, model_generation, triggered_by, status)
-     VALUES (?, 'claude-opus-4-7', 'claude-sonnet-4-6', 'smoke-c-b-5', 'planned')`
-  ).run(postId);
+     VALUES (?, ?, ?, 'smoke-c-b-5', 'planned')`
+  ).run(postId, llmModels.analysis, llmModels.generation);
   const sessionId = info.lastInsertRowid;
   console.log(`  session_id=${sessionId}`);
 

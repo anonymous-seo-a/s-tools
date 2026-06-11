@@ -61,11 +61,12 @@ function assert(cond, msg) {
 
   // === 1. 一時 session INSERT ===
   console.log('=== 1. 一時 session INSERT ===');
+  const llmModels = require('../../shared/llm-adapters/anthropic-adapter').getModels();
   const info = conn.prepare(
     `INSERT INTO master_rewrite_session
        (post_id, model_analysis, model_generation, triggered_by, status)
-     VALUES (?, 'claude-opus-4-7', 'claude-sonnet-4-6', 'smoke-c-c', 'planned')`
-  ).run(postId);
+     VALUES (?, ?, ?, 'smoke-c-c', 'planned')`
+  ).run(postId, llmModels.analysis, llmModels.generation);
   const sessionId = info.lastInsertRowid;
   console.log(`  session_id=${sessionId}`);
 

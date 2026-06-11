@@ -17,6 +17,7 @@
  *   [12] スケルトン隠れたコスト: ajv validation なし
  */
 const db = require('../db');
+const { getModels } = require('../../shared/llm-adapters/anthropic-adapter');
 const items = require('../../shared/schemas/hcu-checklist-items.json');
 
 const ITEMS_BY_ID = new Map(items.items.map((it) => [it.id, it]));
@@ -43,7 +44,9 @@ function computeItemResults(evaluations) {
   return { merged, compliant };
 }
 
-function insertHcuEvaluation({ llmResult, evaluatedBy = 'claude_sonnet_4_6', extraNotes = {} }) {
+function insertHcuEvaluation({ llmResult, evaluatedBy, extraNotes = {} }) {
+  // 抽出は generation ロール (extract.js の sonnet()) で実行されるため、現行設定を既定値にする
+  if (!evaluatedBy) evaluatedBy = getModels().generation;
   if (!llmResult || typeof llmResult.post_id !== 'number') {
     throw new Error('insertHcuEvaluation: llmResult.post_id required');
   }
@@ -62,7 +65,7 @@ function insertHcuEvaluation({ llmResult, evaluatedBy = 'claude_sonnet_4_6', ext
   const missingIds = items.items.filter((it) => !returnedIds.has(it.id)).map((it) => it.id);
 
   const notesJson = JSON.stringify({
-    model: 'claude-sonnet-4-6',
+    model: getModels().generation,
     input_tokens: llmResult.usage?.input_tokens ?? null,
     output_tokens: llmResult.usage?.output_tokens ?? null,
     body_chars: llmResult.body_chars ?? null,

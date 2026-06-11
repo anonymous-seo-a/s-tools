@@ -63,11 +63,12 @@ async function runOne({ post_id, qf_id, conn }) {
   applyMigration(conn);
   conn.pragma('foreign_keys = ON');
 
+  const llmModels = require('../../shared/llm-adapters/anthropic-adapter').getModels();
   const info = conn.prepare(
     `INSERT INTO master_rewrite_session
        (post_id, model_analysis, model_generation, triggered_by, status)
-     VALUES (?, 'claude-opus-4-7', 'claude-sonnet-4-6', 'validation-run', 'planned')`
-  ).run(post_id);
+     VALUES (?, ?, ?, 'validation-run', 'planned')`
+  ).run(post_id, llmModels.analysis, llmModels.generation);
   const sessionId = info.lastInsertRowid;
 
   // smoke-e2e と同じ mock gap (アコム / プロミス を共通 fact gap として注入)

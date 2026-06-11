@@ -148,6 +148,11 @@ export const api = {
   updateDiffJudgment: (id, body) =>
     request(`/api/rewrite/judgment/diffs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
+  // LLM モデル設定 (ロール別トグル)
+  getLlmModels: () => request('/api/rewrite/judgment/models'),
+  updateLlmModels: (body) =>
+    request('/api/rewrite/judgment/models', { method: 'PUT', body: JSON.stringify(body) }),
+
   startComplianceJob: (sessionId, opts = {}) =>
     request(`/api/rewrite/judgment/sessions/${sessionId}/compliance`, {
       method: 'POST',

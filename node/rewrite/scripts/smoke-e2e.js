@@ -62,11 +62,12 @@ async function runOnePass({ label, injectViolation, postId, queryFanoutId, conn 
   console.log(`========================================`);
 
   // session INSERT
+  const llmModels = require('../../shared/llm-adapters/anthropic-adapter').getModels();
   const info = conn.prepare(
     `INSERT INTO master_rewrite_session
        (post_id, model_analysis, model_generation, triggered_by, status)
-     VALUES (?, 'claude-opus-4-7', 'claude-sonnet-4-6', 'smoke-c-e', 'planned')`
-  ).run(postId);
+     VALUES (?, ?, ?, 'smoke-c-e', 'planned')`
+  ).run(postId, llmModels.analysis, llmModels.generation);
   const sessionId = info.lastInsertRowid;
   console.log(`  session_id=${sessionId}`);
 

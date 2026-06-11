@@ -21,6 +21,7 @@ service-account-key.json
 dist/
 
 # Operational data (node webapp)
+node/data/llm-models.json
 node/data/gap-fill-results.json
 node/data/apply-history.json
 node/data/backups/

@@ -6,6 +6,7 @@ const { runComplianceCheck } = require('../llm-execution/compliance-runner');
 const { runAnalysis } = require('../llm-execution/analysis-runner');
 const { runDiffGeneration } = require('../llm-execution/diff-runner');
 const { sessionCostUsd } = require('../llm-execution/cost');
+const { getModels, setModels, ALLOWED_MODELS } = require('../../shared/llm-adapters/anthropic-adapter');
 const { planGutenbergApply, applyGutenbergOps, htmlToBlocks } = require('../apply/gutenberg-apply');
 const { classifyDomain, collectCompetitorCorpus } = require('../competitor-corpus/collect');
 const { extractForQueryFanout } = require('../fact-set/extract');
@@ -25,11 +26,12 @@ async function runGenerationPipeline(job, conn) {
 
   // 1. session INSERT
   job.step = 'session_init';
+  const m = getModels();
   const info = conn.prepare(
     `INSERT INTO master_rewrite_session
        (post_id, model_analysis, model_generation, triggered_by, status, genre)
-     VALUES (?, 'claude-opus-4-7', 'claude-sonnet-4-6', 'ui-generation', 'planned', ?)`
-  ).run(post_id, genre);
+     VALUES (?, ?, ?, 'ui-generation', 'planned', ?)`
+  ).run(post_id, m.analysis, m.generation, genre);
   const session_id = info.lastInsertRowid;
   job.session_id = session_id;
 
@@ -429,6 +431,21 @@ function updateDiffJudgment(id, { judgment, reject_reason, reject_note, edit_con
 
 function buildRouter() {
   const router = express.Router();
+
+  // GET /api/rewrite/judgment/models — ロール別の現行モデルと選択肢
+  router.get('/models', (_req, res) => {
+    res.json({ current: getModels(), allowed: ALLOWED_MODELS });
+  });
+
+  // PUT /api/rewrite/judgment/models — { analysis?, generation? } を切替・永続化
+  router.put('/models', (req, res) => {
+    try {
+      const current = setModels(req.body || {});
+      res.json({ current, allowed: ALLOWED_MODELS });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
 
   // GET /api/rewrite/judgment/sessions?status=awaiting_diff_judgment&limit=N
   router.get('/sessions', (req, res) => {
