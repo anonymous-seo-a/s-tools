@@ -608,6 +608,51 @@ function SessionDetail({ sessionId, showToast, onJudged }) {
   );
 }
 
+// バッチ item ステータス → 表示ラベル/バッジ色
+const BATCH_ITEM_LABEL = {
+  queued:     { label: '待機',          badge: 'pending' },
+  preparing:  { label: 'クエリ準備中',   badge: 'pending' },
+  generating: { label: '生成中',        badge: 'pending' },
+  judging:    { label: '自動承認中',     badge: 'pending' },
+  applying:   { label: 'WP適用中',      badge: 'pending' },
+  done:       { label: '完了',          badge: 'approved' },
+  held:       { label: '伺い (判定待ち)', badge: 'applied' },
+  failed:     { label: '失敗',          badge: 'rejected' },
+};
+
+function BatchPanel({ job }) {
+  if (!job) return null;
+  const doneCount = job.items.filter((it) => ['done', 'held', 'failed'].includes(it.status)).length;
+  return (
+    <div style={{ padding: '10px 12px', background: 'white', borderTop: '1px solid #fbc02d', fontSize: 12 }}>
+      <div style={{ marginBottom: 6 }}>
+        <strong>一括リライト</strong>
+        <span className={`status-badge ${job.status === 'completed' ? 'approved' : job.status === 'failed' ? 'rejected' : 'pending'}`} style={{ marginLeft: 8 }}>
+          {job.status === 'running' ? `実行中 ${doneCount}/${job.total}` : job.status}
+        </span>
+        <span style={{ marginLeft: 8, color: '#888' }}>
+          自動承認基準: violationsなし × riskなし × confidence high / 基準外は「伺い」として判定待ちに残る
+        </span>
+      </div>
+      {job.items.map((it) => {
+        const st = BATCH_ITEM_LABEL[it.status] || { label: it.status, badge: 'pending' };
+        return (
+          <div key={it.post_id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #f5f5f5' }}>
+            <span style={{ width: 56, color: '#888' }}>#{it.post_id}</span>
+            <span className={`status-badge ${st.badge}`}>{st.label}</span>
+            {it.session_id && <span style={{ color: '#888' }}>session #{it.session_id}</span>}
+            {it.diff_count != null && <span style={{ color: '#666' }}>diffs {it.diff_count}</span>}
+            {it.auto_approved != null && <span style={{ color: '#2e7d32' }}>承認 {it.auto_approved}</span>}
+            {it.held > 0 && <span style={{ color: '#f57f17' }}>伺い {it.held}</span>}
+            {it.applied && <span style={{ color: '#1565c0' }}>WP適用 {it.applied_count}件</span>}
+            {it.error && <span style={{ color: '#c62828', flex: 1 }}>{it.error}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   const [postId, setPostId] = useState('');
   const [queryFanouts, setQueryFanouts] = useState([]);
@@ -617,6 +662,9 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   const [candidates, setCandidates] = useState([]);
   const [candLoading, setCandLoading] = useState(false);
   const [preparingId, setPreparingId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [autoApply, setAutoApply] = useState(true);
+  const [batchJob, setBatchJob] = useState(null);
 
   const refreshFanouts = async (selectId) => {
     const r = await api.getQueryFanouts();
@@ -628,18 +676,24 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   useEffect(() => {
     refreshFanouts().catch(() => {});
     api.getGenerationJob().then(setJob).catch(() => {});
+    api.getBatchRewrite().then(setBatchJob).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 自動ピック候補をカテゴリ変更時にロード (順位モニタリング由来)。全カテゴリ時は出さない。
-  useEffect(() => {
+  const loadCandidates = useCallback(() => {
     if (!genre || genre === 'all') { setCandidates([]); setCandLoading(false); return; }
     setCandLoading(true);
-    api.getRewriteCandidates(genre, 20)
+    api.getAutoPickCandidates(genre, 20)
       .then((r) => setCandidates(r.items || []))
       .catch(() => setCandidates([]))
       .finally(() => setCandLoading(false));
   }, [genre]);
+
+  // 自動ピック候補をカテゴリ変更時にロード (順位モニタリング由来)。全カテゴリ時は出さない。
+  useEffect(() => {
+    setSelectedIds(new Set());
+    loadCandidates();
+  }, [loadCandidates]);
 
   // 候補を選んで生成準備 (top query → query_fanout 自動生成 → フォームにセット)
   const pickCandidate = async (c) => {
@@ -676,6 +730,55 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
     return () => clearInterval(t);
   }, [job, showToast, onSessionCreated]);
 
+  // batch polling
+  useEffect(() => {
+    if (!batchJob || batchJob.status !== 'running') return;
+    const t = setInterval(async () => {
+      try {
+        const j = await api.getBatchRewrite();
+        setBatchJob(j);
+        if (j.status !== 'running') {
+          clearInterval(t);
+          const applied = j.items.filter((it) => it.applied).length;
+          const held = j.items.filter((it) => it.status === 'held').length;
+          const failed = j.items.filter((it) => it.status === 'failed').length;
+          showToast(`一括リライト完了: WP適用 ${applied} / 伺い ${held} / 失敗 ${failed} (全${j.total}件)`);
+          loadCandidates(); // リライト済みになった記事が候補から消える
+          onSessionCreated?.();
+        }
+      } catch (_) {}
+    }, 5000);
+    return () => clearInterval(t);
+  }, [batchJob, showToast, onSessionCreated, loadCandidates]);
+
+  const toggleSelect = (pid) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(pid)) next.delete(pid); else next.add(pid);
+      return next;
+    });
+  };
+
+  const handleStartBatch = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return showToast('候補をチェックで選択してください', 'error');
+    const ok = confirm(
+      `${ids.length} 記事を一括リライトします (直列実行)。\n` +
+      `自動承認: violationsなし × riskなし × confidence high のみ。基準外 diff は判定待ちに残ります。\n` +
+      `WP自動適用: ${autoApply ? 'ON (全 diff クリーンな記事のみ即適用)' : 'OFF (承認まで)'}\n` +
+      `推定: 約 $0.6 × ${ids.length} = $${(0.6 * ids.length).toFixed(1)} / 約 ${ids.length * 3} 分。続行?`
+    );
+    if (!ok) return;
+    try {
+      const j = await api.startBatchRewrite({ post_ids: ids, genre, autoApply, enableCompliance: true });
+      setBatchJob(j);
+      setSelectedIds(new Set());
+      showToast(`一括リライト開始 (${ids.length}件)`);
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
   const handleStart = async () => {
     const pid = Number(postId);
     const qfid = Number(queryFanoutId);
@@ -699,7 +802,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
     generating: '差分生成中 (Sonnet)', compliance: 'compliance 検査中', done: '完了',
   };
 
-  const running = job?.status === 'running';
+  const running = job?.status === 'running' || batchJob?.status === 'running';
 
   return (
     <div className="article-group" style={{ marginBottom: 16, background: '#fffde7' }}>
@@ -708,7 +811,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
       </div>
       <div style={{ padding: 12, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
         <label style={{ fontSize: 12, color: '#666' }}>カテゴリ</label>
-        <select value={genre} onChange={(e) => setGenre(e.target.value)} disabled={running}>
+        <select value={genre} onChange={(e) => setGenre(e.target.value)} disabled={running} style={{ width: 'auto' }}>
           <option value="cardloan">カードローン</option>
           <option value="securities">証券</option>
           <option value="cryptocurrency">仮想通貨</option>
@@ -725,7 +828,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
           disabled={running}
         />
         <label style={{ fontSize: 12, color: '#666' }}>query_fanout</label>
-        <select value={queryFanoutId} onChange={(e) => setQueryFanoutId(e.target.value)} disabled={running} style={{ minWidth: 280 }}>
+        <select value={queryFanoutId} onChange={(e) => setQueryFanoutId(e.target.value)} disabled={running} style={{ width: 'auto', minWidth: 280, maxWidth: 480 }}>
           {queryFanouts.map((q) => (
             <option key={q.id} value={q.id}>#{q.id} {q.sub_query} (seed: {q.seed_query})</option>
           ))}
@@ -739,15 +842,37 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
         </button>
       </div>
 
-      {/* 自動ピック候補 (順位モニタリング: 平均順位11-20 = 伸びしろ) */}
+      {/* 自動ピック候補 (順位モニタリング: 平均順位11-20 = 伸びしろ)。リライト済み・進行中の記事は除外。 */}
       <div style={{ padding: '4px 12px 12px' }}>
-        <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>
-          リライト候補 (順位11-20 / 直近28日 impression 降順){candLoading ? ' — 読込中...' : ` — ${candidates.length}件`}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: '#666', marginBottom: 4, flexWrap: 'wrap' }}>
+          <span>
+            リライト候補 (順位11-20 / impression 降順 / リライト済みは除外)
+            {candLoading ? ' — 読込中...' : ` — ${candidates.length}件`}
+          </span>
+          <button className="btn-secondary btn-small" onClick={loadCandidates} disabled={candLoading}>候補を更新</button>
+          {candidates.length > 0 && (
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} disabled={running} style={{ width: 'auto' }} />
+                クリーンな記事は WP 自動適用
+              </label>
+              <button className="btn-apply btn-small" onClick={handleStartBatch} disabled={running || selectedIds.size === 0}>
+                選択 {selectedIds.size} 件を一括リライト
+              </button>
+            </span>
+          )}
         </div>
         {candidates.length > 0 && (
           <div style={{ maxHeight: 200, overflow: 'auto', border: '1px solid #fbc02d', borderRadius: 6, background: 'white' }}>
             {candidates.map((c) => (
               <div key={c.post_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderBottom: '1px solid #f5f5f5', fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(c.post_id)}
+                  onChange={() => toggleSelect(c.post_id)}
+                  disabled={running}
+                  style={{ width: 'auto' }}
+                />
                 <span style={{ color: '#888', width: 56 }}>#{c.post_id}</span>
                 <span style={{ width: 70, color: c.avg_rank <= 13 ? '#e65100' : '#888' }}>順位 {c.avg_rank}</span>
                 <span style={{ width: 90, color: '#555' }}>impr {c.impressions}</span>
@@ -760,6 +885,8 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
           </div>
         )}
       </div>
+
+      <BatchPanel job={batchJob} />
       {job && (
         <div style={{ padding: '10px 12px', background: 'white', borderTop: '1px solid #fbc02d', fontSize: 12 }}>
           <span style={{ marginRight: 8, color: '#666' }}>job: {job.job_id}</span>

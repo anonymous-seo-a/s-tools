@@ -352,11 +352,23 @@ async function fetchWpTitles(ids) {
   } catch { return {}; }
 }
 
+// セッションが存在する (失敗・キャンセル以外) 記事 = リライト済み or 進行中。候補から除外する。
+function getRewrittenPostIds() {
+  return new Set(
+    open().prepare(
+      `SELECT DISTINCT post_id FROM master_rewrite_session
+       WHERE status NOT IN ('failed', 'cancelled')`
+    ).all().map((r) => r.post_id)
+  );
+}
+
 async function fetchRewriteCandidates(genre, limit) {
   const category = genre || 'cardloan';
   const mdb = require('../../monitor-db');
   const db = mdb.getDB();
+  const rewritten = getRewrittenPostIds();
   // alias は daily_metrics の列名 (impressions/rank/ctr) と衝突させない (HAVING で集計が誤評価されるため)。
+  // limit は除外後に適用するため、SQL 側は余裕を持って取る。
   const rows = db.prepare(`
     SELECT m.post_id, a.url,
            AVG(m.rank) AS avgRank, SUM(m.impressions) AS sumImpr,
@@ -368,7 +380,9 @@ async function fetchRewriteCandidates(genre, limit) {
     HAVING avgRank BETWEEN 11 AND 20 AND sumImpr >= ?
     ORDER BY sumImpr DESC
     LIMIT ?
-  `).all(category, CANDIDATE_MIN_IMPR, limit);
+  `).all(category, CANDIDATE_MIN_IMPR, limit + rewritten.size)
+    .filter((r) => !rewritten.has(r.post_id))
+    .slice(0, limit);
   const titles = await fetchWpTitles(rows.map((r) => r.post_id));
   return rows.map((r) => ({
     post_id: r.post_id,
@@ -399,6 +413,216 @@ async function prepareCandidate(postId, genre) {
      VALUES (?, ?, 1, 'auto-pick', 1, ?)`
   ).run(targetQuery, targetQuery, `auto-pick post ${postId} (${genre || 'cardloan'})`);
   return { post_id: postId, query_fanout_id: info.lastInsertRowid, target_query: targetQuery };
+}
+
+// ─────────────────────────────────────────────────────────────
+// 自動承認 (一括リライト用)
+//   実績データ (過去の Daiki 判定) に基づく保守的基準:
+//     却下実績は rate_update の事実誤りと medium 確信度に集中
+//   → 自動承認 = compliance violations なし × risk_flag なし × llm_confidence 'high'
+//     それ以外は pending のまま残す (= 判断に迷う部分として Daiki に伺う)
+// ─────────────────────────────────────────────────────────────
+function diffHasViolations(rationale) {
+  try {
+    const p = typeof rationale === 'string' ? JSON.parse(rationale) : rationale;
+    return Array.isArray(p?.compliance?.detected_violations) && p.compliance.detected_violations.length > 0;
+  } catch {
+    return true; // rationale が壊れている diff は安全側 (伺い) に倒す
+  }
+}
+
+function autoJudgeSession(sessionId) {
+  const conn = open();
+  const diffs = conn.prepare(
+    `SELECT id, rationale, risk_flag, llm_confidence, daiki_judgment
+     FROM master_rewrite_diff WHERE session_id=? AND daiki_judgment='pending'`
+  ).all(sessionId);
+  const approve = conn.prepare(
+    `UPDATE master_rewrite_diff SET daiki_judgment='approved', judged_at=CURRENT_TIMESTAMP WHERE id=?`
+  );
+  let autoApproved = 0;
+  const held = [];
+  for (const d of diffs) {
+    const riskFree = !d.risk_flag || d.risk_flag === 'none';
+    const confident = d.llm_confidence === 'high';
+    const clean = !diffHasViolations(d.rationale);
+    if (riskFree && confident && clean) {
+      approve.run(d.id);
+      autoApproved++;
+    } else {
+      held.push({
+        diff_id: d.id,
+        reasons: [
+          !clean && 'compliance違反',
+          !riskFree && `risk:${d.risk_flag}`,
+          !confident && `conf:${d.llm_confidence}`,
+        ].filter(Boolean),
+      });
+    }
+  }
+  return { auto_approved: autoApproved, held };
+}
+
+// ─────────────────────────────────────────────────────────────
+// 一括リライトバッチ (生成 → 自動承認 → 全 diff クリーンなら WP 適用)
+//   - 直列実行 (LLM/WP 負荷と生成排他を単純化)
+//   - 1記事の失敗は記録して次へ進む (バッチ全体は止めない)
+//   - held (伺い) が 1 件でもあるセッションは WP 適用せず判定待ちに残す
+//     (部分適用すると残り diff を後から適用できなくなるため)
+//   - in-memory state: サーバ再起動で進捗表示は消えるが、生成済み session は DB に残る
+// ─────────────────────────────────────────────────────────────
+const batchJobs = new Map(); // job_id → state
+let activeBatchJobId = null;
+const BATCH_MAX_POSTS = 20;
+
+function isGenerationBusy() {
+  if (activeGenerationJobId) {
+    const g = generationJobs.get(activeGenerationJobId);
+    if (g && g.status === 'running') return 'single generation in progress';
+  }
+  if (activeBatchJobId) {
+    const b = batchJobs.get(activeBatchJobId);
+    if (b && b.status === 'running') return 'batch in progress';
+  }
+  return null;
+}
+
+async function runBatchRewrite(job) {
+  const { genre, enableCompliance, autoApply } = job.options;
+  for (let i = 0; i < job.items.length; i++) {
+    const item = job.items[i];
+    job.current_index = i;
+    try {
+      // 1. top query → query_fanout 自動生成
+      item.status = 'preparing';
+      const prep = await prepareCandidate(item.post_id, genre);
+
+      // 2. 一気通貫生成 (session_init → corpus → analysis → diff → compliance)
+      item.status = 'generating';
+      const genJob = {
+        options: { post_id: item.post_id, query_fanout_id: prep.query_fanout_id, enableCompliance, genre },
+        session_id: null, step: 'init', analysis: null, diff: null, compliance: null,
+      };
+      try {
+        await runGenerationPipeline(genJob, open());
+      } catch (e) {
+        // 単発生成 route と同じ後始末: session を failed に落として復旧不能ストールを防ぐ
+        if (genJob.session_id) {
+          try {
+            open().prepare(
+              `UPDATE master_rewrite_session
+               SET status='failed', notes=json_set(COALESCE(NULLIF(notes,''),'{}'), '$.pipeline_error', ?)
+               WHERE id=?`
+            ).run(e.message || String(e), genJob.session_id);
+          } catch { /* noop */ }
+        }
+        throw e;
+      }
+      item.session_id = genJob.session_id;
+      item.diff_count = genJob.diff?.diffs_inserted ?? 0;
+      item.violations = genJob.compliance?.total_violations ?? null;
+
+      // 3. 自動承認 (基準外は pending のまま = 伺い)
+      item.status = 'judging';
+      const judged = autoJudgeSession(genJob.session_id);
+      item.auto_approved = judged.auto_approved;
+      item.held = judged.held.length;
+      item.held_details = judged.held;
+
+      // 4. WP 適用 (autoApply 時のみ。held があれば全体を判定待ちに残す)
+      if (autoApply && judged.held.length === 0 && judged.auto_approved > 0) {
+        item.status = 'applying';
+        const applied = await applySessionCore(genJob.session_id, { dryRun: false });
+        item.applied = applied.applied;
+        item.applied_count = applied.applied_count || 0;
+        item.status = 'done';
+      } else if (judged.held.length > 0) {
+        item.status = 'held'; // 伺い: 判定タブで pending diff を確認
+      } else {
+        item.status = 'done'; // autoApply off or approved 0 (適用対象なし)
+      }
+    } catch (e) {
+      item.status = 'failed';
+      item.error = e.message || String(e);
+      console.error(`[batch ${job.job_id}] post ${item.post_id}:`, e);
+    }
+  }
+  job.current_index = job.items.length;
+}
+
+// ─────────────────────────────────────────────────────────────
+// WP 適用コア (route /sessions/:id/apply と batch 共用)。
+// throw: { httpStatus, message } 相当のエラー。成功時は route と同じ payload を返す。
+// ─────────────────────────────────────────────────────────────
+async function applySessionCore(id, { dryRun = false } = {}) {
+  const conn = open();
+  const session = conn.prepare(`SELECT id, post_id, status, wp_apply_completed_at FROM master_rewrite_session WHERE id=?`).get(id);
+  if (!session) { const e = new Error('session not found'); e.httpStatus = 404; throw e; }
+  if (!dryRun && session.wp_apply_completed_at) {
+    const e = new Error('already applied'); e.httpStatus = 409; throw e;
+  }
+  const diffs = conn.prepare(
+    `SELECT id, diff_order, target_section, change_type, daiki_judgment, daiki_edit_content,
+            content_before, content_after
+     FROM master_rewrite_diff WHERE session_id=? ORDER BY diff_order`
+  ).all(id);
+  const wp = await fetchWpPost(session.post_id);
+  const plan = planGutenbergApply(wp.content_raw, diffs);     // 本文 (insert/rewrite)
+  const meta = planMetaDiffs(diffs);                          // title / meta description
+  const planned = [...plan.planned, ...meta.meta_planned];
+  const skipped = [...plan.skipped, ...meta.meta_skipped];
+
+  if (planned.length === 0) {
+    return {
+      dry_run: dryRun, post_id: session.post_id, applied: false,
+      planned, skipped, reason: 'no diffs to apply',
+    };
+  }
+
+  if (dryRun) {
+    return { dry_run: true, post_id: session.post_id, applied: false, planned, skipped };
+  }
+
+  // 実適用。snapshot は raw content + title を JSON で保存 (rollback で完全復元)。
+  const applied = applyGutenbergOps(wp.content_raw, plan.ops);
+  conn.prepare(
+    `UPDATE master_rewrite_session
+     SET wp_snapshot_before_apply=?, wp_apply_started_at=CURRENT_TIMESTAMP
+     WHERE id=?`
+  ).run(JSON.stringify({ content_raw: wp.content_raw, title_raw: wp.title_raw }), id);
+
+  const payload = { content: applied.raw };
+  if (meta.newTitle) payload.title = meta.newTitle;
+  await updateWpPost(session.post_id, payload);
+
+  // meta description は AIOSEO mu-plugin 経由 (未配置なら skip 扱い)。
+  let metaDescApplied = true;
+  if (meta.newMetaDesc) {
+    const r = await updateAioseoDescription(session.post_id, meta.newMetaDesc);
+    if (!r.ok) {
+      metaDescApplied = false;
+      skipped.push({ diff_id: meta.metaDescDiffId, reason: `meta description 適用不可: ${r.reason}` });
+    }
+  }
+
+  conn.prepare(
+    `UPDATE master_rewrite_session
+     SET wp_apply_completed_at=CURRENT_TIMESTAMP, status='completed', completed_at=CURRENT_TIMESTAMP
+     WHERE id=?`
+  ).run(id);
+
+  const metaIds = meta.meta_planned
+    .filter((m) => metaDescApplied || m.op !== 'update_meta_description')
+    .map((m) => m.diff_id);
+  const appliedIds = [...plan.planned.map((p) => p.diff_id), ...metaIds];
+  const applyMark = conn.prepare(`UPDATE master_rewrite_diff SET applied_to_wp=1, applied_at=CURRENT_TIMESTAMP WHERE id=?`);
+  for (const did of appliedIds) applyMark.run(did);
+
+  return {
+    dry_run: false, post_id: session.post_id, applied: true,
+    planned, skipped, applied_count: appliedIds.length,
+    conflicts: applied.conflicts,
+  };
 }
 
 function updateDiffJudgment(id, { judgment, reject_reason, reject_note, edit_content }) {
@@ -539,11 +763,9 @@ function buildRouter() {
   //   同時実行 1 件まで (排他)
   router.post('/sessions', (req, res) => {
     try {
-      if (activeGenerationJobId) {
-        const cur = generationJobs.get(activeGenerationJobId);
-        if (cur && cur.status === 'running') {
-          return res.status(409).json({ error: 'another generation in progress', job: cur });
-        }
+      const busy = isGenerationBusy();
+      if (busy) {
+        return res.status(409).json({ error: busy });
       }
       const body = req.body || {};
       const post_id = Number(body.post_id);
@@ -622,6 +844,74 @@ function buildRouter() {
     return res.json(job);
   });
 
+  // POST /api/rewrite/judgment/batch
+  //   body: { post_ids: number[], genre, enableCompliance?: true, autoApply?: true }
+  //   候補記事を直列で 生成 → 自動承認 → (全クリーンなら) WP 適用。
+  //   自動承認基準外の diff は pending に残り、セッションは判定待ち (伺い) になる。
+  router.post('/batch', (req, res) => {
+    try {
+      const busy = isGenerationBusy();
+      if (busy) return res.status(409).json({ error: busy });
+
+      const body = req.body || {};
+      const postIds = Array.isArray(body.post_ids)
+        ? body.post_ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+        : [];
+      if (postIds.length === 0) return res.status(400).json({ error: 'post_ids (positive integers) required' });
+      if (postIds.length > BATCH_MAX_POSTS) {
+        return res.status(400).json({ error: `post_ids は最大 ${BATCH_MAX_POSTS} 件`, given: postIds.length });
+      }
+      const genre = typeof body.genre === 'string' ? body.genre : 'cardloan';
+      const enableCompliance = body.enableCompliance !== false;
+      const autoApply = body.autoApply !== false;
+
+      const job_id = `batch-${Date.now()}`;
+      const job = {
+        job_id,
+        status: 'running',
+        options: { genre, enableCompliance, autoApply },
+        total: postIds.length,
+        current_index: 0,
+        items: postIds.map((pid) => ({
+          post_id: pid, status: 'queued', session_id: null,
+          diff_count: null, violations: null,
+          auto_approved: null, held: null, held_details: null,
+          applied: false, applied_count: 0, error: null,
+        })),
+        started_at: new Date().toISOString(),
+        completed_at: null,
+      };
+      batchJobs.set(job_id, job);
+      activeBatchJobId = job_id;
+
+      (async () => {
+        try {
+          await runBatchRewrite(job);
+          job.status = 'completed';
+        } catch (e) {
+          job.status = 'failed';
+          job.error = e.message || String(e);
+          console.error(`[batch job ${job_id}]`, e);
+        } finally {
+          job.completed_at = new Date().toISOString();
+        }
+      })();
+
+      return res.status(202).json(job);
+    } catch (e) {
+      console.error('[POST /judgment/batch]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/rewrite/judgment/batch — 最新バッチの進捗
+  router.get('/batch', (_req, res) => {
+    if (!activeBatchJobId) return res.status(404).json({ error: 'no batch job' });
+    const job = batchJobs.get(activeBatchJobId);
+    if (!job) return res.status(404).json({ error: 'no batch job' });
+    return res.json(job);
+  });
+
   // GET /api/rewrite/judgment/query-fanouts  → 候補リスト
   router.get('/query-fanouts', (_req, res) => {
     try {
@@ -648,75 +938,10 @@ function buildRouter() {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
       const dryRun = !!(req.body && req.body.dry_run);
-      const conn = open();
-      const session = conn.prepare(`SELECT id, post_id, status, wp_apply_completed_at FROM master_rewrite_session WHERE id=?`).get(id);
-      if (!session) return res.status(404).json({ error: 'session not found', id });
-      if (!dryRun && session.wp_apply_completed_at) {
-        return res.status(409).json({ error: 'already applied', wp_apply_completed_at: session.wp_apply_completed_at });
-      }
-      const diffs = conn.prepare(
-        `SELECT id, diff_order, target_section, change_type, daiki_judgment, daiki_edit_content,
-                content_before, content_after
-         FROM master_rewrite_diff WHERE session_id=? ORDER BY diff_order`
-      ).all(id);
-      const wp = await fetchWpPost(session.post_id);
-      const plan = planGutenbergApply(wp.content_raw, diffs);     // 本文 (insert/rewrite)
-      const meta = planMetaDiffs(diffs);                          // title / meta description
-      const planned = [...plan.planned, ...meta.meta_planned];
-      const skipped = [...plan.skipped, ...meta.meta_skipped];
-
-      if (planned.length === 0) {
-        return res.json({
-          dry_run: dryRun, post_id: session.post_id, applied: false,
-          planned, skipped, reason: 'no diffs to apply',
-        });
-      }
-
-      if (dryRun) {
-        return res.json({ dry_run: true, post_id: session.post_id, applied: false, planned, skipped });
-      }
-
-      // 実適用。snapshot は raw content + title を JSON で保存 (rollback で完全復元)。
-      const applied = applyGutenbergOps(wp.content_raw, plan.ops);
-      conn.prepare(
-        `UPDATE master_rewrite_session
-         SET wp_snapshot_before_apply=?, wp_apply_started_at=CURRENT_TIMESTAMP
-         WHERE id=?`
-      ).run(JSON.stringify({ content_raw: wp.content_raw, title_raw: wp.title_raw }), id);
-
-      const payload = { content: applied.raw };
-      if (meta.newTitle) payload.title = meta.newTitle;
-      await updateWpPost(session.post_id, payload);
-
-      // meta description は AIOSEO mu-plugin 経由 (未配置なら skip 扱い)。
-      let metaDescApplied = true;
-      if (meta.newMetaDesc) {
-        const r = await updateAioseoDescription(session.post_id, meta.newMetaDesc);
-        if (!r.ok) {
-          metaDescApplied = false;
-          skipped.push({ diff_id: meta.metaDescDiffId, reason: `meta description 適用不可: ${r.reason}` });
-        }
-      }
-
-      conn.prepare(
-        `UPDATE master_rewrite_session
-         SET wp_apply_completed_at=CURRENT_TIMESTAMP, status='completed', completed_at=CURRENT_TIMESTAMP
-         WHERE id=?`
-      ).run(id);
-
-      const metaIds = meta.meta_planned
-        .filter((m) => metaDescApplied || m.op !== 'update_meta_description')
-        .map((m) => m.diff_id);
-      const appliedIds = [...plan.planned.map((p) => p.diff_id), ...metaIds];
-      const applyMark = conn.prepare(`UPDATE master_rewrite_diff SET applied_to_wp=1, applied_at=CURRENT_TIMESTAMP WHERE id=?`);
-      for (const did of appliedIds) applyMark.run(did);
-
-      return res.json({
-        dry_run: false, post_id: session.post_id, applied: true,
-        planned, skipped, applied_count: appliedIds.length,
-        conflicts: applied.conflicts,
-      });
+      const result = await applySessionCore(id, { dryRun });
+      return res.json(result);
     } catch (e) {
+      if (e.httpStatus) return res.status(e.httpStatus).json({ error: e.message, id: Number(req.params.id) });
       console.error('[POST /judgment/sessions/:id/apply]', e);
       return res.status(500).json({ error: e.message });
     }

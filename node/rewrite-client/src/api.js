@@ -141,7 +141,8 @@ export const api = {
     request(`/api/rewrite/judgment/sessions/${id}`),
   getSessionEvidence: (id) =>
     request(`/api/rewrite/judgment/sessions/${id}/evidence`),
-  getRewriteCandidates: (genre, limit = 20) =>
+  // 自動ピック候補 (順位モニタリング由来)。注意: 対象選定タブの getRewriteCandidates (軸別) とは別物。
+  getAutoPickCandidates: (genre, limit = 20) =>
     request(`/api/rewrite/judgment/rewrite-candidates?genre=${encodeURIComponent(genre || 'cardloan')}&limit=${limit}`),
   prepareCandidate: (postId, genre) =>
     request(`/api/rewrite/judgment/rewrite-candidates/${postId}/prepare`, { method: 'POST', body: JSON.stringify({ genre }) }),
@@ -169,6 +170,11 @@ export const api = {
     }),
   getGenerationJob: (jobId) =>
     request(jobId ? `/api/rewrite/judgment/generation/${jobId}` : '/api/rewrite/judgment/generation'),
+
+  // 一括リライト (生成 → 自動承認 → 全クリーンなら WP 適用)
+  startBatchRewrite: (body) =>
+    request('/api/rewrite/judgment/batch', { method: 'POST', body: JSON.stringify(body) }),
+  getBatchRewrite: () => request('/api/rewrite/judgment/batch'),
   getQueryFanouts: () =>
     request('/api/rewrite/judgment/query-fanouts'),
 
