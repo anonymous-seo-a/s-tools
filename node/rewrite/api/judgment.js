@@ -40,10 +40,18 @@ async function runGenerationPipeline(job, conn) {
   //    これにより auto-pick 生成も「競合にあり自記事に無い事実」のデータ駆動になる。
   const fanout = conn.prepare('SELECT sub_query FROM master_query_fanout WHERE id=?').get(query_fanout_id);
   if (!fanout) throw new Error(`query_fanout_id=${query_fanout_id} not found`);
+  // corpus (fanout 単位) と IG (post×query 単位) は別条件でスキップ判定する:
+  // fanout を別 post / リトライで再利用した場合、corpus はあっても
+  // この post の fact 抽出・IG が未計算のことがある。
   const hasCorpus = conn.prepare('SELECT COUNT(*) n FROM master_competitor_corpus WHERE query_fanout_id=?').get(query_fanout_id).n;
   if (!hasCorpus) {
     job.step = 'competitor_corpus';
     await collectCompetitorCorpus(query_fanout_id, { topN: 5 });
+  }
+  const hasIg = conn.prepare(
+    'SELECT COUNT(*) n FROM master_information_gain_score WHERE post_id=? AND target_query=?'
+  ).get(post_id, fanout.sub_query).n;
+  if (!hasIg) {
     job.step = 'fact_extraction';
     await extractForQueryFanout({ post_id, query_fanout_id });
     calcIgScore({ post_id, query_fanout_id });
@@ -408,6 +416,15 @@ async function prepareCandidate(postId, genre) {
   const targetQuery = top[0]?.query;
   if (!targetQuery) throw new Error('top query を取得できなかった');
   const conn = open();
+  // 同一クエリの auto-pick fanout は再利用 (fanout 行の重複防止 + 収集済み競合コーパスの
+  // 再利用で Yahoo SERP 取得を省略できる → throttle 負荷とリトライ時間を削減)。
+  const existing = conn.prepare(
+    `SELECT id FROM master_query_fanout
+     WHERE sub_query=? AND generation_method='auto-pick' ORDER BY id DESC LIMIT 1`
+  ).get(targetQuery);
+  if (existing) {
+    return { post_id: postId, query_fanout_id: existing.id, target_query: targetQuery, reused: true };
+  }
   const info = conn.prepare(
     `INSERT INTO master_query_fanout (seed_query, sub_query, layer, generation_method, priority, notes)
      VALUES (?, ?, 1, 'auto-pick', 1, ?)`
@@ -487,11 +504,26 @@ function isGenerationBusy() {
   return null;
 }
 
+const BATCH_ITEM_COOLDOWN_MS = 15_000;   // Yahoo SERP 連続取得を避ける項目間クールダウン
+const BATCH_THROTTLE_ABORT = 2;          // 連続 throttle 失敗でバッチ中断 (IP ブロック中の全滅突撃防止)
+
+function isThrottleError(msg) {
+  return /throttled|HTTP 429|HTTP 403/i.test(msg || '');
+}
+
 async function runBatchRewrite(job) {
   const { genre, enableCompliance, autoApply } = job.options;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let consecutiveThrottle = 0;
   for (let i = 0; i < job.items.length; i++) {
     const item = job.items[i];
     job.current_index = i;
+    if (consecutiveThrottle >= BATCH_THROTTLE_ABORT) {
+      item.status = 'skipped';
+      item.error = 'Yahoo throttle 連続検出のため中断 — 30分以上おいて失敗分を再選択してください';
+      continue;
+    }
+    if (i > 0) await sleep(BATCH_ITEM_COOLDOWN_MS);
     try {
       // 1. top query → query_fanout 自動生成
       item.status = 'preparing';
@@ -541,9 +573,12 @@ async function runBatchRewrite(job) {
       } else {
         item.status = 'done'; // autoApply off or approved 0 (適用対象なし)
       }
+      consecutiveThrottle = 0;
     } catch (e) {
       item.status = 'failed';
       item.error = e.message || String(e);
+      if (isThrottleError(item.error)) consecutiveThrottle++;
+      else consecutiveThrottle = 0;
       console.error(`[batch ${job.job_id}] post ${item.post_id}:`, e);
     }
   }

@@ -618,6 +618,7 @@ const BATCH_ITEM_LABEL = {
   done:       { label: '完了',          badge: 'approved' },
   held:       { label: '伺い (判定待ち)', badge: 'applied' },
   failed:     { label: '失敗',          badge: 'rejected' },
+  skipped:    { label: '中断スキップ',    badge: 'rejected' },
 };
 
 function BatchPanel({ job }) {

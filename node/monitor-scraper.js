@@ -146,11 +146,15 @@ async function runYahooDailyScrape({ limit = 200, intervalSec = 15, onProgress }
 /**
  * Yahoo! 検索のクエリ上位 organic 結果 URL を返す (競合コーパス取得用、SerpApi 代替)。
  * yahoo 内部 (知恵袋等) は除外、hash/query を落として origin+path で dedupe。
+ * throttle (429/403) はバックオフ付きで自動リトライ (90s → 240s)。
  * @returns Array<{ link, position }>
  */
-async function searchYahooResults(keyword, { topN = 10, maxPages = 2 } = {}) {
+const YAHOO_BACKOFF_MS = [90_000, 240_000];
+
+async function searchYahooResults(keyword, { topN = 10, maxPages = 2, retries = 2 } = {}) {
   const seen = new Set();
   const out = [];
+  let throttleCount = 0;
   for (let page = 0; page < maxPages && out.length < topN; page++) {
     const start = page * RESULTS_PER_PAGE + 1;
     const searchUrl = `https://search.yahoo.co.jp/search?p=${encodeURIComponent(keyword)}&b=${start}`;
@@ -158,7 +162,17 @@ async function searchYahooResults(keyword, { topN = 10, maxPages = 2 } = {}) {
       headers: { 'User-Agent': UA, 'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
     });
     if (!res.ok) {
-      if (res.status === 429 || res.status === 403) throw new Error(`Yahoo throttled: HTTP ${res.status}`);
+      if (res.status === 429 || res.status === 403) {
+        if (throttleCount < retries) {
+          const wait = YAHOO_BACKOFF_MS[Math.min(throttleCount, YAHOO_BACKOFF_MS.length - 1)];
+          throttleCount++;
+          console.warn(`[searchYahooResults] HTTP ${res.status} — backoff ${wait / 1000}s (${throttleCount}/${retries})`);
+          await sleep(wait);
+          page--; // 同じページを再試行
+          continue;
+        }
+        throw new Error(`Yahoo throttled: HTTP ${res.status}`);
+      }
       break;
     }
     const html = await res.text();
@@ -181,7 +195,7 @@ async function searchYahooResults(keyword, { topN = 10, maxPages = 2 } = {}) {
       if (out.length >= topN) break;
     }
     if (hrefs.length < 5) break;
-    await sleep(1200);
+    await sleep(3000);
   }
   return out;
 }
