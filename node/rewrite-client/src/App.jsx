@@ -46,22 +46,16 @@ function ModelToggle({ showToast }) {
   };
 
   return (
-    <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 11 }}>
+    <div className="model-toggle">
       {[['analysis', '分析'], ['generation', '生成']].map(([role, label]) => (
-        <div key={role} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <span style={{ opacity: 0.7 }}>{label}</span>
-          {config.allowed.map((m) => (
-            <button
-              key={m.id}
-              onClick={() => select(role, m.id)}
-              style={{
-                fontSize: 11, padding: '3px 8px', borderRadius: 4, border: 'none', cursor: 'pointer',
-                background: config.current[role] === m.id ? 'white' : 'rgba(255,255,255,0.15)',
-                color: config.current[role] === m.id ? '#1565c0' : 'white',
-              }}
-            >{m.label}</button>
-          ))}
-        </div>
+        <label key={role}>
+          <span>{label}</span>
+          <select value={config.current[role]} onChange={(e) => select(role, e.target.value)}>
+            {config.allowed.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+        </label>
       ))}
     </div>
   );
@@ -83,12 +77,12 @@ export default function App() {
   return (
     <>
       <div className="header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div className="header-title-row">
           <h1>リライトツール</h1>
-          <a href="/" style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12, textDecoration: 'none' }}>← s-tools トップ</a>
+          <a href="/" className="header-back">← s-tools トップ</a>
         </div>
-        <div className="header-nav" style={{ justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', gap: 16 }}>
+        <div className="header-nav">
+          <div className="header-tabs">
             {TABS.map(t => (
               <button key={t.key} className={page === t.key ? 'active' : ''} onClick={() => setPage(t.key)}>
                 {t.label}

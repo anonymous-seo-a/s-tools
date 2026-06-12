@@ -319,8 +319,8 @@ function ChartPanel({ title, data, dataKey, color, markers, reverseY, unit, over
       {!hasData ? (
         <div className="monitor-chart-empty">データなし</div>
       ) : (
-        <ResponsiveContainer width="100%" height={180}>
-          <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={190}>
+          <LineChart data={data} margin={{ top: 18, right: 16, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
             <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={formatDateShort} minTickGap={20} />
             <YAxis
@@ -358,7 +358,13 @@ function ChartPanel({ title, data, dataKey, color, markers, reverseY, unit, over
                 strokeWidth={1}
                 ifOverflow="extendDomain"
               >
-                <Label value={`KW→${c.to}`} position="top" fill="#6a1b9a" fontSize={10} />
+                {/* 長い KW はグラフ外にはみ出すため切り詰め (全文はツールチップで確認) */}
+                <Label
+                  value={`KW→${c.to.length > 12 ? c.to.slice(0, 12) + '…' : c.to}`}
+                  position="insideTopLeft"
+                  fill="#6a1b9a"
+                  fontSize={10}
+                />
               </ReferenceLine>
             ))}
             <Line
@@ -835,7 +841,7 @@ function ScraperSettingsPanel({ onClose, showToast }) {
     <div className="monitor-scraper-panel">
       <h3>Yahoo! 順位スクレイピング</h3>
       <div className="monitor-scraper-note">
-        Top N 記事を対象に、Yahoo! 検索で top_kw の順位 (1〜50位) を毎日スクレイピングします。15秒間隔 / UA 偽装。
+        リライト適用済み記事 (直近90日、優先) + PV 上位 N 記事を対象に、Yahoo! 検索で top_kw の順位を毎日スクレイピングします。15秒間隔 / UA 偽装。
       </div>
       <div className="monitor-scraper-grid">
         <label>

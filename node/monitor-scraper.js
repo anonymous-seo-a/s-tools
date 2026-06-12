@@ -70,8 +70,47 @@ async function searchYahooRank({ keyword, targetUrl }) {
   return { rank: null, note: 'not_found_top' + (MAX_PAGES * RESULTS_PER_PAGE) };
 }
 
+// リライト適用済み記事 (直近 lookbackDays 日) の post_id を rewrite.db から取得。
+// rewrite.db 未作成・テーブル未作成の環境では空配列。
+function getRewriteAppliedPostIds(lookbackDays = 90) {
+  try {
+    const rdb = require('./rewrite/db').open();
+    return rdb.prepare(`
+      SELECT DISTINCT post_id FROM master_rewrite_session
+      WHERE wp_apply_completed_at IS NOT NULL
+        AND wp_apply_completed_at >= datetime('now', ?)
+    `).all(`-${lookbackDays} days`).map(r => r.post_id);
+  } catch {
+    return [];
+  }
+}
+
 /**
- * メインジョブ: Top N 記事について Yahoo 順位をスクレイピング。
+ * スクレイプ対象 = リライト適用済み記事 (優先・先頭) + PV Top N。
+ * 適用済み記事は PV 圏外でも必ず含める (効果測定の当日順位検知に必須)。
+ */
+function getScrapeTargets(limit = 200) {
+  const base = db.getTopArticlesByPv(limit, 30);
+  const seen = new Set(base.map(t => t.post_id));
+  const priority = [];
+  for (const pid of getRewriteAppliedPostIds()) {
+    if (seen.has(pid)) {
+      // 既に PV 圏内 → 先頭に移動 (ジョブ中断時も適用済み分は取得済みにする)
+      const idx = base.findIndex(t => t.post_id === pid);
+      priority.push(base.splice(idx, 1)[0]);
+      continue;
+    }
+    const art = db.getArticle(pid);
+    if (art && art.url && art.top_kw) {
+      priority.push({ post_id: art.post_id, url: art.url, top_kw: art.top_kw });
+      seen.add(pid);
+    }
+  }
+  return [...priority, ...base];
+}
+
+/**
+ * メインジョブ: リライト適用済み + Top N 記事について Yahoo 順位をスクレイピング。
  * 各クエリ間 intervalSec 秒待機。
  */
 async function runYahooDailyScrape({ limit = 200, intervalSec = 15, onProgress } = {}) {
@@ -80,7 +119,7 @@ async function runYahooDailyScrape({ limit = 200, intervalSec = 15, onProgress }
   const date = new Date().toISOString().slice(0, 10);
   let succeeded = 0, failed = 0, notFound = 0;
   try {
-    const targets = db.getTopArticlesByPv(limit, 30);
+    const targets = getScrapeTargets(limit);
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
       try {
@@ -147,4 +186,4 @@ async function searchYahooResults(keyword, { topN = 10, maxPages = 2 } = {}) {
   return out;
 }
 
-module.exports = { runYahooDailyScrape, searchYahooRank, searchYahooResults };
+module.exports = { runYahooDailyScrape, searchYahooRank, searchYahooResults, getScrapeTargets };

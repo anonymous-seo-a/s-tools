@@ -36,6 +36,9 @@ function buildRouter() {
       const mdb = require('../../monitor-db');
       const m = mdb.getDB();
       const latest = m.prepare('SELECT MAX(date) AS d FROM daily_metrics').get().d;
+      const latestYahoo = m.prepare(
+        "SELECT MAX(date) AS d FROM daily_scraped_rank WHERE engine = 'yahoo'"
+      ).get().d;
       const artStmt = m.prepare('SELECT url, title FROM articles WHERE post_id = ?');
       const aggStmt = m.prepare(`
         SELECT AVG(rank) AS avgRank, SUM(impressions) AS sumImpr,
@@ -46,6 +49,17 @@ function buildRouter() {
       const seriesStmt = m.prepare(`
         SELECT date, rank FROM daily_metrics
         WHERE post_id = ? AND date >= ? AND rank IS NOT NULL
+        ORDER BY date
+      `);
+      // Yahoo スクレイプ (当日値): GSC の約4日遅れを補う速報系列
+      const yahooAggStmt = m.prepare(`
+        SELECT AVG(rank) AS avgRank, COUNT(rank) AS days
+        FROM daily_scraped_rank
+        WHERE post_id = ? AND engine = 'yahoo' AND date BETWEEN ? AND ? AND rank IS NOT NULL
+      `);
+      const yahooSeriesStmt = m.prepare(`
+        SELECT date, rank FROM daily_scraped_rank
+        WHERE post_id = ? AND engine = 'yahoo' AND date >= ? AND rank IS NOT NULL
         ORDER BY date
       `);
       const dateAdd = m.prepare('SELECT date(?, ?) AS d');
@@ -60,6 +74,10 @@ function buildRouter() {
         const after = aggStmt.get(s.post_id, postStart, latest || s.applied_date);
         const rankBefore = before.avgRank != null ? Number(before.avgRank.toFixed(1)) : null;
         const rankAfter = after.avgRank != null ? Number(after.avgRank.toFixed(1)) : null;
+        const yBefore = yahooAggStmt.get(s.post_id, preStart, preEnd);
+        const yAfter = yahooAggStmt.get(s.post_id, postStart, latestYahoo || s.applied_date);
+        const yahooBefore = yBefore.avgRank != null ? Number(yBefore.avgRank.toFixed(1)) : null;
+        const yahooAfter = yAfter.avgRank != null ? Number(yAfter.avgRank.toFixed(1)) : null;
         return {
           session_id: s.session_id,
           post_id: s.post_id,
@@ -77,11 +95,22 @@ function buildRouter() {
           days_after: after.days,
           impressions_after: after.sumImpr || 0,
           clicks_after: after.sumClick || 0,
+          yahoo_before: yahooBefore,
+          yahoo_after: yahooAfter,
+          yahoo_delta: yahooBefore != null && yahooAfter != null
+            ? Number((yahooBefore - yahooAfter).toFixed(1)) : null,
+          yahoo_days_after: yAfter.days,
           series: seriesStmt.all(s.post_id, preStart),
+          yahoo_series: yahooSeriesStmt.all(s.post_id, preStart),
         };
       });
 
-      return res.json({ count: items.length, latest_metric_date: latest, items });
+      return res.json({
+        count: items.length,
+        latest_metric_date: latest,
+        latest_yahoo_date: latestYahoo,
+        items,
+      });
     } catch (e) {
       console.error('[GET /rewrite/measurement]', e);
       return res.status(500).json({ error: e.message });
