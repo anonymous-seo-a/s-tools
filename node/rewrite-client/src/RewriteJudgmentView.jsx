@@ -621,19 +621,27 @@ const BATCH_ITEM_LABEL = {
   skipped:    { label: '中断スキップ',    badge: 'rejected' },
 };
 
-function BatchPanel({ job }) {
+function BatchPanel({ job, onRetry }) {
   if (!job) return null;
-  const doneCount = job.items.filter((it) => ['done', 'held', 'failed'].includes(it.status)).length;
+  const doneCount = job.items.filter((it) => ['done', 'held', 'failed', 'skipped'].includes(it.status)).length;
+  const retryIds = job.status !== 'running'
+    ? job.items.filter((it) => it.status === 'failed' || it.status === 'skipped').map((it) => it.post_id)
+    : [];
   return (
     <div style={{ padding: '10px 12px', background: 'white', borderTop: '1px solid #fbc02d', fontSize: 12 }}>
-      <div style={{ marginBottom: 6 }}>
+      <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <strong>一括リライト</strong>
-        <span className={`status-badge ${job.status === 'completed' ? 'approved' : job.status === 'failed' ? 'rejected' : 'pending'}`} style={{ marginLeft: 8 }}>
+        <span className={`status-badge ${job.status === 'completed' ? 'approved' : job.status === 'failed' ? 'rejected' : 'pending'}`}>
           {job.status === 'running' ? `実行中 ${doneCount}/${job.total}` : job.status}
         </span>
-        <span style={{ marginLeft: 8, color: '#888' }}>
+        <span style={{ color: '#888' }}>
           自動承認基準: violationsなし × riskなし × confidence high / 基準外は「伺い」として判定待ちに残る
         </span>
+        {retryIds.length > 0 && (
+          <button className="btn-apply btn-small" style={{ marginLeft: 'auto' }} onClick={() => onRetry(retryIds)}>
+            失敗分を再実行 ({retryIds.length}件)
+          </button>
+        )}
       </div>
       {job.items.map((it) => {
         const st = BATCH_ITEM_LABEL[it.status] || { label: it.status, badge: 'pending' };
@@ -760,24 +768,41 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
     });
   };
 
-  const handleStartBatch = async () => {
-    const ids = [...selectedIds];
-    if (ids.length === 0) return showToast('候補をチェックで選択してください', 'error');
+  const startBatch = async (ids, opts) => {
     const ok = confirm(
       `${ids.length} 記事を一括リライトします (直列実行)。\n` +
       `自動承認: violationsなし × riskなし × confidence high のみ。基準外 diff は判定待ちに残ります。\n` +
-      `WP自動適用: ${autoApply ? 'ON (全 diff クリーンな記事のみ即適用)' : 'OFF (承認まで)'}\n` +
+      `WP自動適用: ${opts.autoApply ? 'ON (全 diff クリーンな記事のみ即適用)' : 'OFF (承認まで)'}\n` +
       `推定: 約 $0.6 × ${ids.length} = $${(0.6 * ids.length).toFixed(1)} / 約 ${ids.length * 3} 分。続行?`
     );
     if (!ok) return;
     try {
-      const j = await api.startBatchRewrite({ post_ids: ids, genre, autoApply, enableCompliance: true });
+      const j = await api.startBatchRewrite({ post_ids: ids, genre: opts.genre, autoApply: opts.autoApply, enableCompliance: true });
       setBatchJob(j);
       setSelectedIds(new Set());
       showToast(`一括リライト開始 (${ids.length}件)`);
     } catch (e) {
       showToast(e.message, 'error');
     }
+  };
+
+  const handleStartBatch = () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return showToast('候補をチェックで選択してください', 'error');
+    startBatch(ids, { genre, autoApply });
+  };
+
+  // 失敗/中断スキップ分を元バッチと同じ設定で再実行
+  const handleRetryFailed = (ids) => {
+    startBatch(ids, {
+      genre: batchJob?.options?.genre || genre,
+      autoApply: batchJob?.options?.autoApply ?? autoApply,
+    });
+  };
+
+  const allSelected = candidates.length > 0 && selectedIds.size === candidates.length;
+  const toggleSelectAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(candidates.map((c) => c.post_id)));
   };
 
   const handleStart = async () => {
@@ -853,6 +878,9 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
           <button className="btn-secondary btn-small" onClick={loadCandidates} disabled={candLoading}>候補を更新</button>
           {candidates.length > 0 && (
             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button className="btn-secondary btn-small" onClick={toggleSelectAll} disabled={running}>
+                {allSelected ? '全解除' : `全選択 (${candidates.length})`}
+              </button>
               <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} disabled={running} style={{ width: 'auto' }} />
                 クリーンな記事は WP 自動適用
@@ -887,7 +915,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
         )}
       </div>
 
-      <BatchPanel job={batchJob} />
+      <BatchPanel job={batchJob} onRetry={handleRetryFailed} />
       {job && (
         <div style={{ padding: '10px 12px', background: 'white', borderTop: '1px solid #fbc02d', fontSize: 12 }}>
           <span style={{ marginRight: 8, color: '#666' }}>job: {job.job_id}</span>
