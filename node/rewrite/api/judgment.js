@@ -19,6 +19,16 @@ const complianceJobs = new Map();
 const generationJobs = new Map(); // job_id → { ... }
 let activeGenerationJobId = null;
 
+// ─────────────────────────────────────────────────────────────
+// リライト一時停止ジャンル (2026-06-16 Daiki 指示: カードローンをしばらく停止)
+//   生成系の入口 (sessions / batch / auto-batch / candidate prepare) で 403 で弾く。
+//   再開する場合はこの Set を空にする (UI の DISABLED_GENRES も同時に更新)。
+// ─────────────────────────────────────────────────────────────
+const DISABLED_REWRITE_GENRES = new Set(['cardloan']);
+function genreDisabledResponse(res, genre) {
+  return res.status(403).json({ error: `「${genre}」のリライトは現在停止中です (一時停止ジャンル)` });
+}
+
 // β-1A: smoke-e2e.js の一気通貫フローを単独関数化。
 // embedding-poc が未完成領域なので mock gap データを INSERT する (現状の Phase 2 と同質)。
 async function runGenerationPipeline(job, conn) {
@@ -789,6 +799,7 @@ function buildRouter() {
       const postId = Number(req.params.postId);
       if (!Number.isInteger(postId) || postId <= 0) return res.status(400).json({ error: 'invalid postId' });
       const genre = (req.body && req.body.genre) || 'cardloan';
+      if (DISABLED_REWRITE_GENRES.has(genre)) return genreDisabledResponse(res, genre);
       const r = await prepareCandidate(postId, genre);
       return res.json(r);
     } catch (e) {
@@ -833,6 +844,7 @@ function buildRouter() {
       }
       const enableCompliance = body.enableCompliance !== false;
       const genre = typeof body.genre === 'string' ? body.genre : 'cardloan';
+      if (DISABLED_REWRITE_GENRES.has(genre)) return genreDisabledResponse(res, genre);
 
       const job_id = `gen-${Date.now()}`;
       const job = {
@@ -917,6 +929,7 @@ function buildRouter() {
         return res.status(400).json({ error: `post_ids は最大 ${BATCH_MAX_POSTS} 件`, given: postIds.length });
       }
       const genre = typeof body.genre === 'string' ? body.genre : 'cardloan';
+      if (DISABLED_REWRITE_GENRES.has(genre)) return genreDisabledResponse(res, genre);
       const enableCompliance = body.enableCompliance !== false;
       const autoApply = body.autoApply !== false;
 
@@ -973,6 +986,7 @@ function buildRouter() {
 
       const body = req.body || {};
       const genre = typeof body.genre === 'string' ? body.genre : 'cardloan';
+      if (DISABLED_REWRITE_GENRES.has(genre)) return genreDisabledResponse(res, genre);
       let count = parseInt(body.count, 10);
       if (!Number.isInteger(count) || count <= 0) {
         return res.status(400).json({ error: 'count (positive integer) required' });

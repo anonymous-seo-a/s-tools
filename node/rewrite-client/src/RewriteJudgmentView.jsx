@@ -687,6 +687,10 @@ function BatchPanel({ job, onRetry }) {
   );
 }
 
+// リライト一時停止ジャンル (バックエンド judgment.js DISABLED_REWRITE_GENRES と一致させる)。
+// 再開時は両方を空にする。
+const DISABLED_GENRES = new Set(['cardloan']);
+
 function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   const [postId, setPostId] = useState('');
   const [queryFanouts, setQueryFanouts] = useState([]);
@@ -732,6 +736,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
 
   // 候補を選んで生成準備 (top query → query_fanout 自動生成 → フォームにセット)
   const pickCandidate = async (c) => {
+    if (DISABLED_GENRES.has(genre)) return showToast(`「${genre}」のリライトは現在停止中です`, 'error');
     setPreparingId(c.post_id);
     try {
       const r = await api.prepareCandidate(c.post_id, genre);
@@ -796,6 +801,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   };
 
   const startBatch = async (ids, opts) => {
+    if (DISABLED_GENRES.has(opts.genre)) return showToast(`「${opts.genre}」のリライトは現在停止中です`, 'error');
     const ok = confirm(
       `${ids.length} 記事を一括リライトします (直列実行)。\n` +
       `自動承認: violationsなし × riskなし × confidence high のみ。基準外 diff は判定待ちに残ります。\n` +
@@ -821,6 +827,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
 
   // 件数指定の全自動モード: 候補を自動ピックし、致命的判断要を除外して残りを WP 反映まで。
   const handleStartAuto = async () => {
+    if (DISABLED_GENRES.has(genre)) return showToast(`「${genre}」のリライトは現在停止中です`, 'error');
     if (!genre || genre === 'all') return showToast('カテゴリを選択してください', 'error');
     const n = Math.max(1, Math.min(50, Number(autoCount) || 0));
     const ok = confirm(
@@ -856,6 +863,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   };
 
   const handleStart = async () => {
+    if (DISABLED_GENRES.has(genre)) return showToast(`「${genre}」のリライトは現在停止中です`, 'error');
     const pid = Number(postId);
     const qfid = Number(queryFanoutId);
     if (!Number.isInteger(pid) || pid <= 0) return showToast('post_id を入力してください', 'error');
@@ -879,12 +887,18 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   };
 
   const running = job?.status === 'running' || batchJob?.status === 'running';
+  const genreDisabled = DISABLED_GENRES.has(genre);
 
   return (
     <div className="article-group" style={{ marginBottom: 16, background: '#fffde7' }}>
       <div className="article-header" style={{ background: '#fff9c4', borderBottom: '1px solid #fbc02d' }}>
         <div className="article-title">新規セッション生成 (一気通貫: analysis → diff → compliance)</div>
       </div>
+      {genreDisabled && (
+        <div style={{ margin: '8px 12px 0', padding: '8px 12px', background: '#ffebee', border: '1px solid #ef5350', borderRadius: 6, color: '#c62828', fontSize: 12 }}>
+          ⛔ 「{genre}」のリライトは現在<strong>停止中</strong>です。生成・一括・全自動の各操作は無効化されています (別カテゴリは通常どおり利用可)。
+        </div>
+      )}
       <div style={{ padding: 12, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
         <label style={{ fontSize: 12, color: '#666' }}>カテゴリ</label>
         <select value={genre} onChange={(e) => setGenre(e.target.value)} disabled={running} style={{ width: 'auto' }}>
@@ -913,7 +927,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
           <input type="checkbox" checked={enableCompliance} onChange={(e) => setEnableCompliance(e.target.checked)} disabled={running} style={{ marginRight: 4, width: 'auto' }} />
           compliance 実行
         </label>
-        <button className="btn-apply btn-small" onClick={handleStart} disabled={running}>
+        <button className="btn-apply btn-small" onClick={handleStart} disabled={running || genreDisabled}>
           {running ? '生成中...' : '生成'}
         </button>
       </div>
@@ -929,7 +943,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
             max={50}
             value={autoCount}
             onChange={(e) => setAutoCount(e.target.value)}
-            disabled={running || !genre || genre === 'all'}
+            disabled={running || genreDisabled || !genre || genre === 'all'}
             style={{ width: 64 }}
           />
           <span style={{ fontSize: 12, color: '#555' }}>件 自動ピック → 生成 → 致命的判断要を除外して WP 反映</span>
@@ -937,7 +951,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
             className="btn-apply btn-small"
             style={{ marginLeft: 'auto', background: '#2e7d32' }}
             onClick={handleStartAuto}
-            disabled={running || !genre || genre === 'all'}
+            disabled={running || genreDisabled || !genre || genre === 'all'}
           >
             {running ? '実行中...' : `${Math.max(1, Math.min(50, Number(autoCount) || 0))}件 自動リライト&反映`}
           </button>
@@ -965,7 +979,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
                 <input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} disabled={running} style={{ width: 'auto' }} />
                 クリーンな記事は WP 自動適用
               </label>
-              <button className="btn-apply btn-small" onClick={handleStartBatch} disabled={running || selectedIds.size === 0}>
+              <button className="btn-apply btn-small" onClick={handleStartBatch} disabled={running || genreDisabled || selectedIds.size === 0}>
                 選択 {selectedIds.size} 件を一括リライト
               </button>
             </span>
@@ -986,7 +1000,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
                 <span style={{ width: 70, color: c.avg_rank <= 13 ? '#e65100' : '#888' }}>順位 {c.avg_rank}</span>
                 <span style={{ width: 90, color: '#555' }}>impr {c.impressions}</span>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.title}>{c.title || c.url}</span>
-                <button className="btn-secondary btn-small" disabled={running || preparingId === c.post_id} onClick={() => pickCandidate(c)}>
+                <button className="btn-secondary btn-small" disabled={running || genreDisabled || preparingId === c.post_id} onClick={() => pickCandidate(c)}>
                   {preparingId === c.post_id ? '準備中...' : 'この記事を生成'}
                 </button>
               </div>
