@@ -297,7 +297,9 @@ function MarkerTooltip({ active, payload }) {
       <div className="recharts-tooltip-date">{p.date}</div>
       {payload.map((v, i) => (
         <div key={i} style={{ color: v.color }}>
-          {v.name}: {v.value == null ? '—' : (typeof v.value === 'number' ? v.value.toFixed(v.name === 'rank' ? 1 : 0) : v.value)}
+          {/* 順位 (float) は小数1桁、PV/click (int) はそのまま。
+              旧実装は v.name==='rank' で判定していたが Line.name は title ('順位' 等) なので常に false で小数が落ちていた。 */}
+          {v.name}: {v.value == null ? '—' : (typeof v.value === 'number' ? (Number.isInteger(v.value) ? v.value : v.value.toFixed(1)) : v.value)}
         </div>
       ))}
       {p.markers && p.markers.length > 0 && (
@@ -309,10 +311,26 @@ function MarkerTooltip({ active, payload }) {
   );
 }
 
+// KW変動ラベルのカスタム描画。viewBox=参照線の box。
+//   side: 'right' なら右寄せ (右端付近の見切れ防止)、'left' なら左寄せ。
+//   row : 隣接ラベルの縦段を交互 (0/1) にして横方向の重なりを回避。
+function renderKwLabel({ viewBox }, text, side, row) {
+  if (!viewBox) return null;
+  const pad = 3;
+  const x = side === 'right' ? viewBox.x - pad : viewBox.x + pad;
+  const y = (viewBox.y || 0) + 9 + row * 12;
+  return (
+    <text x={x} y={y} fill="#6a1b9a" fontSize={10} textAnchor={side === 'right' ? 'end' : 'start'}>{text}</text>
+  );
+}
+
 function ChartPanel({ title, data, dataKey, color, markers, reverseY, unit, overlayKey, overlayColor, overlayLabel, topKwChanges }) {
   const groupedMarkers = groupMarkersByDate(markers);
   // データが全て null の場合
   const hasData = data.some(d => d[dataKey] != null);
+  // KW変動ラベルの x 位置 (右端は右寄せ) を判定するための時間レンジ。
+  const firstT = data.length ? Date.parse(data[0].date) : 0;
+  const spanT = Math.max(1, (data.length ? Date.parse(data[data.length - 1].date) : 0) - firstT);
   return (
     <div className="monitor-chart-panel">
       <div className="monitor-chart-title">{title}{unit ? ` (${unit})` : ''}</div>
@@ -349,24 +367,24 @@ function ChartPanel({ title, data, dataKey, color, markers, reverseY, unit, over
                 />
               );
             })}
-            {(topKwChanges || []).map(c => (
-              <ReferenceLine
-                key={`kw-${c.date}`}
-                x={c.date}
-                stroke="#6a1b9a"
-                strokeDasharray="2 3"
-                strokeWidth={1}
-                ifOverflow="extendDomain"
-              >
-                {/* 長い KW はグラフ外にはみ出すため切り詰め (全文はツールチップで確認) */}
-                <Label
-                  value={`KW→${c.to.length > 12 ? c.to.slice(0, 12) + '…' : c.to}`}
-                  position="insideTopLeft"
-                  fill="#6a1b9a"
-                  fontSize={10}
-                />
-              </ReferenceLine>
-            ))}
+            {(topKwChanges || []).map((c, i) => {
+              // 長い KW は切り詰め (全文はツールチップで確認)。右端は右寄せで見切れ防止、
+              // 隣接ラベルは段を交互にして横の重なりを回避。
+              const side = (Date.parse(c.date) - firstT) / spanT > 0.55 ? 'right' : 'left';
+              const text = `KW→${c.to.length > 12 ? c.to.slice(0, 12) + '…' : c.to}`;
+              return (
+                <ReferenceLine
+                  key={`kw-${c.date}`}
+                  x={c.date}
+                  stroke="#6a1b9a"
+                  strokeDasharray="2 3"
+                  strokeWidth={1}
+                  ifOverflow="extendDomain"
+                >
+                  <Label content={(p) => renderKwLabel(p, text, side, i % 2)} />
+                </ReferenceLine>
+              );
+            })}
             <Line
               type="monotone"
               dataKey={dataKey}
