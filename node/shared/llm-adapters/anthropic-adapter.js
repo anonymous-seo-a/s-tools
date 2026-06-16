@@ -2,8 +2,8 @@
  * Anthropic Adapter (shared/ layer)
  *
  * ロール (analysis / generation) → モデルの動的解決を行う薄いラッパ。
- * デフォルトは両ロールとも Fable 5。UI トグル (PUT /api/rewrite/judgment/models)
- * から setModels() で切替、node/data/llm-models.json に永続化する。
+ * デフォルトは両ロールとも Opus 4.8 (2026-06-16 Fable 5 利用不可のため切替)。UI トグル
+ * (PUT /api/rewrite/judgment/models) から setModels() で切替、node/data/llm-models.json に永続化する。
  *
  * 旧 API 互換: opus() = analysis ロール、sonnet() = generation ロール。
  * 呼び出し元 8 ファイルは関数名のまま無修正で現行モデル設定に追従する。
@@ -31,7 +31,9 @@ const ALLOWED_MODELS = [
 const ALLOWED_IDS = new Set(ALLOWED_MODELS.map((m) => m.id));
 
 const CONFIG_PATH = path.join(__dirname, '..', '..', 'data', 'llm-models.json');
-const DEFAULTS = { analysis: 'claude-fable-5', generation: 'claude-fable-5' };
+// デフォルトは両ロールとも Opus 4.8 (2026-06-16: Fable 5 が利用不可のため切替)。
+// llm-models.json があればそちらが優先。UI トグルで個別変更可。
+const DEFAULTS = { analysis: 'claude-opus-4-8', generation: 'claude-opus-4-8' };
 
 let models = { ...DEFAULTS };
 try {
