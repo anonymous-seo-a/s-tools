@@ -262,6 +262,7 @@ const PERIOD_OPTIONS = [
 ];
 
 const MARKER_STYLES = {
+  rewrite: { stroke: '#c62828', label: 'リライト適用' },
   cta_insert: { stroke: '#2e7d32', label: 'CTA挿入' },
   link_replace: { stroke: '#f57f17', label: 'リンク張替' },
   other: { stroke: '#888', label: '反映' },
@@ -349,8 +350,9 @@ function ChartPanel({ title, data, dataKey, color, markers, reverseY, unit, over
             />
             <Tooltip content={<MarkerTooltip />} />
             {groupedMarkers.map(({ date, items }) => {
-              // 同日複数マーカー → 優先度: cta_insert > link_replace > wp_modified > other
-              const primary = items.find(i => i.type === 'cta_insert')
+              // 同日複数マーカー → 優先度: rewrite(赤・最重要) > cta_insert > link_replace > wp_modified > other
+              const primary = items.find(i => i.type === 'rewrite')
+                || items.find(i => i.type === 'cta_insert')
                 || items.find(i => i.type === 'link_replace')
                 || items.find(i => i.type === 'wp_modified')
                 || items[0];
@@ -363,7 +365,10 @@ function ChartPanel({ title, data, dataKey, color, markers, reverseY, unit, over
                   x={date}
                   stroke={style.stroke}
                   strokeDasharray={style.strokeDasharray}
-                  strokeWidth={1.5}
+                  strokeWidth={primary.type === 'rewrite' ? 2.2 : 1.5}
+                  // リライト適用は直近で metrics 範囲(GSC約4日遅れ)の右端を超えがち。
+                  // extendDomain で範囲外でも軸を伸ばして必ず描画する。
+                  ifOverflow="extendDomain"
                 />
               );
             })}
@@ -653,7 +658,7 @@ function KwHistorySection({ postId }) {
   );
 }
 
-function TimelineModal({ article, onClose }) {
+export function TimelineModal({ article, onClose }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [days, setDays] = useState(90);
@@ -683,10 +688,18 @@ function TimelineModal({ article, onClose }) {
       if (!markersByDate.has(d)) markersByDate.set(d, []);
       markersByDate.get(d).push({ date: d, type: 'wp_modified', label: `WP更新: ${d}` });
     }
-    // range: metrics の最初〜最新
+    // range: metrics の最初〜最新。ただしマーカー(リライト適用/WP更新/KW変動)や Yahoo は
+    // metrics 範囲(GSC約4日遅れ)より新しいことがある。category 軸の ReferenceLine は
+    // chartData に無い日付だと描画されないため、end をそれら最新日まで延長する。
     if (data.metrics.length === 0) return [];
     const start = data.metrics[0].date;
-    const end = data.metrics[data.metrics.length - 1].date;
+    let end = data.metrics[data.metrics.length - 1].date;
+    const extraDates = [];
+    for (const m of (data.markers?.apply_history || [])) if (m.date) extraDates.push(m.date);
+    if (data.markers?.wp_modified) extraDates.push(data.markers.wp_modified);
+    for (const c of (data.markers?.top_kw_changes || [])) if (c.date) extraDates.push(c.date);
+    for (const r of (data.scraped?.yahoo || [])) if (r.date) extraDates.push(r.date);
+    for (const d of extraDates) if (d > end) end = d;
     // scraped yahoo rank のマップ
     const yahooMap = new Map();
     for (const r of (data.scraped?.yahoo || [])) yahooMap.set(r.date, r.rank);
@@ -741,6 +754,7 @@ function TimelineModal({ article, onClose }) {
             </button>
           ))}
           <span className="monitor-marker-legend">
+            <span className="legend-marker rewrite" style={{ color: '#c62828', fontWeight: 600 }}>┃ リライト適用</span>
             <span className="legend-marker cta">● CTA挿入</span>
             <span className="legend-marker lr">● リンク張替</span>
             <span className="legend-marker wp">┆ WP更新</span>

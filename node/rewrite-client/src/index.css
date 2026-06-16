@@ -191,6 +191,7 @@ textarea:focus { outline: none; border-color: #1565c0; box-shadow: 0 0 0 2px rgb
 .legend-marker.lr { color: #f57f17; }
 .legend-marker.wp { color: #1565c0; }
 .legend-marker.kwchg { color: #6a1b9a; }
+.legend-marker.rewrite { color: #c62828; }
 
 .monitor-chart-panel { margin-bottom: 14px; background: #fafafa; padding: 8px 4px 4px 4px; border-radius: 6px; }
 .monitor-chart-title { font-size: 12px; font-weight: 600; color: #444; margin-left: 12px; margin-bottom: 4px; }
@@ -209,6 +210,7 @@ textarea:focus { outline: none; border-color: #1565c0; box-shadow: 0 0 0 2px rgb
 .marker-dot.type-link_replace { color: #f57f17; }
 .marker-dot.type-wp_modified { color: #1565c0; }
 .marker-dot.type-other { color: #888; }
+.marker-dot.type-rewrite { color: #c62828; }
 .marker-date { color: #666; min-width: 80px; }
 
 .monitor-section-title { font-weight: 600; font-size: 13px; margin: 16px 0 6px; color: #333; border-top: 1px solid #eee; padding-top: 12px; }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
+import { TimelineModal } from './MonitorView';
 
 // rank は小さいほど上位なので min が上端 (y 軸は反転しない)。
 // GSC (確定、青実線) と Yahoo スクレイプ (速報、ピンク破線) を重ね、適用日に縦線。
@@ -27,7 +28,8 @@ function Sparkline({ series, yahooSeries, appliedDate }) {
   return (
     <svg width={w} height={h} className="meas-sparkline">
       {bx != null && (
-        <line x1={bx} y1={0} x2={bx} y2={h} stroke="#e67e22" strokeWidth="1" strokeDasharray="3,2" />
+        // リライト適用日 = 赤線
+        <line x1={bx} y1={0} x2={bx} y2={h} stroke="#c62828" strokeWidth="1.5" />
       )}
       {gsc.length >= 2 && <path d={toPath(gsc)} fill="none" stroke="#1565c0" strokeWidth="1.5" />}
       {yahoo.length >= 2 && (
@@ -68,6 +70,7 @@ function RankPair({ before, after, waiting }) {
 export default function MeasurementView({ showToast }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [detailFor, setDetailFor] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -145,6 +148,13 @@ export default function MeasurementView({ showToast }) {
                     <span className="meas-article-meta">
                       {it.post_id} · {it.genre} · session #{it.session_id} · diff {it.applied_diff_count}件
                     </span>
+                    <button
+                      className="btn-tiny"
+                      style={{ marginTop: 4 }}
+                      onClick={() => setDetailFor({ post_id: it.post_id, title: it.title, url: it.url })}
+                    >
+                      詳細 ›
+                    </button>
                   </td>
                   <td className="meas-date">{it.applied_date}</td>
                   <td className="meas-rank">
@@ -166,6 +176,8 @@ export default function MeasurementView({ showToast }) {
           </table>
         </div>
       )}
+
+      {detailFor && <TimelineModal article={detailFor} onClose={() => setDetailFor(null)} />}
     </div>
   );
 }

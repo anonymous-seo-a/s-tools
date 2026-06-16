@@ -1079,6 +1079,25 @@ app.get('/api/monitor/articles/:postId/timeline', async (req, res) => {
       .filter(Boolean)
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    // リライト適用マーカー (rewrite.db の master_rewrite_session.wp_apply_completed_at)。
+    // 効果測定タブ・順位モニタ詳細の両方で「リライト日時」を赤線表示するため timeline に同梱。
+    let rewriteApplies = [];
+    try {
+      const rdb = require('./rewrite/db').open();
+      rewriteApplies = rdb.prepare(
+        `SELECT id, wp_apply_completed_at FROM master_rewrite_session
+         WHERE post_id=? AND wp_apply_completed_at IS NOT NULL`
+      ).all(postId).map(s => {
+        const date = (s.wp_apply_completed_at || '').slice(0, 10);
+        if (!date) return null;
+        if (rangeStart && date < rangeStart) return null;
+        return { date, type: 'rewrite', label: `リライト適用 (session #${s.id})`, raw: s };
+      }).filter(Boolean);
+    } catch (_) { /* rewrite.db 未作成等は無視 */ }
+
+    const applyHistoryAll = [...applyHistory, ...rewriteApplies]
+      .sort((a, b) => a.date.localeCompare(b.date));
+
     const wpModified = article?.wp_modified ? article.wp_modified.slice(0, 10) : null;
 
     const scrapedYahoo = monitorDb.getScrapedRankTimeline(postId, 'yahoo', days);
@@ -1091,7 +1110,7 @@ app.get('/api/monitor/articles/:postId/timeline', async (req, res) => {
       metrics,
       markers: {
         wp_modified: wpModified && (!rangeStart || wpModified >= rangeStart) ? wpModified : null,
-        apply_history: applyHistory,
+        apply_history: applyHistoryAll,
         top_kw_changes: topKwChanges,
       },
       scraped: { yahoo: scrapedYahoo },
