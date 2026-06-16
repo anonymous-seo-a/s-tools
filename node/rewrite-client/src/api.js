@@ -182,6 +182,10 @@ export const api = {
   previewApplyApproved: () => request('/api/rewrite/judgment/apply-approved/preview'),
   startApplyApproved: () => request('/api/rewrite/judgment/apply-approved', { method: 'POST' }),
   getApplyApproved: () => request('/api/rewrite/judgment/apply-approved'),
+  // policy 保留セッションの diff 一括生成 (空セッションを判定可能にする)
+  previewResumePolicy: () => request('/api/rewrite/judgment/resume-policy-held/preview'),
+  startResumePolicy: () => request('/api/rewrite/judgment/resume-policy-held', { method: 'POST' }),
+  getResumePolicy: () => request('/api/rewrite/judgment/resume-policy-held'),
   getQueryFanouts: () =>
     request('/api/rewrite/judgment/query-fanouts'),
 

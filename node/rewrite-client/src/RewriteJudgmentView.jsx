@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
 
 const STATUS_OPTIONS = [
-  { key: 'awaiting_diff_judgment', label: '判定待ち' },
-  { key: '',                       label: '全て' },
-  { key: 'completed',              label: '完了' },
-  { key: 'generating',             label: '生成中' },
-  { key: 'analyzing',              label: '分析中' },
-  { key: 'failed',                 label: '失敗' },
+  { key: 'awaiting_diff_judgment',   label: '判定待ち' },
+  { key: 'awaiting_policy_judgment', label: 'policy判断待ち' },
+  { key: '',                         label: '全て' },
+  { key: 'completed',                label: '完了' },
+  { key: 'generating',               label: '生成中' },
+  { key: 'analyzing',                label: '分析中' },
+  { key: 'failed',                   label: '失敗' },
 ];
 
 const GENRE_OPTIONS = [
@@ -1079,14 +1080,63 @@ function ApplyApprovedPanel({ job }) {
   );
 }
 
+const RESUME_ITEM_LABEL = {
+  queued: { label: '待機', badge: 'pending' },
+  generating: { label: 'diff生成中', badge: 'pending' },
+  compliance: { label: 'compliance中', badge: 'pending' },
+  done: { label: '生成完了', badge: 'approved' },
+  skipped: { label: 'スキップ', badge: 'applied' },
+  failed: { label: '失敗', badge: 'rejected' },
+};
+
+function ResumePolicyPanel({ job }) {
+  if (!job || !job.items) return null;
+  const done = job.items.filter((it) => ['done', 'skipped', 'failed'].includes(it.status)).length;
+  const okN = job.items.filter((it) => it.status === 'done').length;
+  const failedN = job.items.filter((it) => it.status === 'failed').length;
+  return (
+    <div style={{ margin: '0 0 12px', padding: '10px 12px', background: 'white', border: '1px solid #6a1b9a', borderRadius: 8, fontSize: 12 }}>
+      <div style={{ marginBottom: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>policy保留セッションの diff 生成</strong>
+        <span className={`status-badge ${job.status === 'completed' ? 'approved' : job.status === 'failed' ? 'rejected' : 'pending'}`}>
+          {job.status === 'running' ? `実行中 ${done}/${job.total}` : job.status}
+        </span>
+        {job.status !== 'running' && (
+          <span style={{ display: 'flex', gap: 8 }}>
+            <span style={{ color: '#2e7d32' }}>生成 {okN}</span>
+            <span style={{ color: '#c62828' }}>失敗 {failedN}</span>
+            <span style={{ color: '#888' }}>→「判定待ち」で承認できます</span>
+          </span>
+        )}
+      </div>
+      {job.items.map((it) => {
+        const st = RESUME_ITEM_LABEL[it.status] || { label: it.status, badge: 'pending' };
+        return (
+          <div key={it.session_id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #f5f5f5' }}>
+            <span style={{ width: 64, color: '#888', flexShrink: 0 }}>s#{it.session_id}</span>
+            <span style={{ width: 76, color: '#888', flexShrink: 0 }}>post {it.post_id}</span>
+            <span className={`status-badge ${st.badge}`} style={{ flexShrink: 0 }}>{st.label}</span>
+            {it.diff_count != null && <span style={{ color: '#666', flexShrink: 0 }}>diffs {it.diff_count}</span>}
+            {it.violations != null && <span style={{ color: '#f57f17', flexShrink: 0 }}>violations {it.violations}</span>}
+            {it.reason && <span style={{ color: '#888', flex: 1, minWidth: 0 }}>{it.reason}</span>}
+            {it.error && <span style={{ color: '#c62828', flex: 1, minWidth: 0 }}>{it.error}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function RewriteJudgmentView({ showToast }) {
   const [status, setStatus] = useState('awaiting_diff_judgment');
-  const [genre, setGenre] = useState('cardloan');
+  const [genre, setGenre] = useState(''); // 既定は全カテゴリ (held 記事の genre 取り違えで見落とすのを防ぐ)
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [applyJob, setApplyJob] = useState(null);
   const [applyCount, setApplyCount] = useState(null);
+  const [resumeJob, setResumeJob] = useState(null);
+  const [resumeCount, setResumeCount] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1105,12 +1155,55 @@ export default function RewriteJudgmentView({ showToast }) {
   const loadApplyCount = useCallback(() => {
     api.previewApplyApproved().then((r) => setApplyCount(r.count)).catch(() => setApplyCount(null));
   }, []);
+  const loadResumeCount = useCallback(() => {
+    api.previewResumePolicy().then((r) => setResumeCount(r.count)).catch(() => setResumeCount(null));
+  }, []);
 
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status, genre]);
   useEffect(() => {
     loadApplyCount();
+    loadResumeCount();
     api.getApplyApproved().then(setApplyJob).catch(() => {});
-  }, [loadApplyCount]);
+    api.getResumePolicy().then(setResumeJob).catch(() => {});
+  }, [loadApplyCount, loadResumeCount]);
+
+  // policy 保留 diff生成ジョブのポーリング
+  useEffect(() => {
+    if (!resumeJob || resumeJob.status !== 'running') return;
+    const t = setInterval(async () => {
+      try {
+        const j = await api.getResumePolicy();
+        setResumeJob(j);
+        if (j.status !== 'running') {
+          clearInterval(t);
+          const done = j.items.filter((it) => it.status === 'done').length;
+          const failed = j.items.filter((it) => it.status === 'failed').length;
+          showToast(`policy保留のdiff生成完了: 生成 ${done} / 失敗 ${failed} (全${j.total}件) → 判定待ちで承認できます`);
+          load();
+          loadResumeCount();
+        }
+      } catch (_) { /* noop */ }
+    }, 5000);
+    return () => clearInterval(t);
+  }, [resumeJob, showToast, load, loadResumeCount]);
+
+  const handleResumePolicy = async () => {
+    if (!resumeCount) return showToast('diff未生成のpolicy保留セッションはありません', 'error');
+    const ok = confirm(
+      `diff未生成の policy保留セッション ${resumeCount} 件の差分を生成します。\n` +
+      `(corpus収集済みなのでYahoo SERPは叩かず、Sonnet差分生成のみ。約 $0.1〜0.2 × ${resumeCount})\n` +
+      `生成後は「判定待ち」で承認/却下できます。自動適用はされません。続行?`
+    );
+    if (!ok) return;
+    try {
+      const j = await api.startResumePolicy();
+      if (j.started === false) { showToast(j.message || '対象なし'); loadResumeCount(); return; }
+      setResumeJob(j);
+      showToast(`policy保留のdiff生成を開始 (${j.total}件)`);
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
 
   // 一括適用ジョブのポーリング
   useEffect(() => {
@@ -1172,9 +1265,20 @@ export default function RewriteJudgmentView({ showToast }) {
         <button className="btn-secondary btn-small" onClick={load} disabled={loading}>
           {loading ? '読込中...' : '再読込'}
         </button>
+        {resumeCount > 0 && (
+          <button
+            className="btn-apply btn-small"
+            style={{ marginLeft: 'auto', background: '#6a1b9a' }}
+            onClick={handleResumePolicy}
+            disabled={resumeJob?.status === 'running'}
+            title="diff未生成のpolicy保留セッション(自動リライトで伺いになった空セッション)の差分を生成して判定可能にする"
+          >
+            {resumeJob?.status === 'running' ? 'diff生成中...' : `policy保留をdiff生成 (${resumeCount}件)`}
+          </button>
+        )}
         <button
           className="btn-apply btn-small"
-          style={{ marginLeft: 'auto', background: '#1565c0' }}
+          style={{ marginLeft: resumeCount > 0 ? 0 : 'auto', background: '#1565c0' }}
           onClick={handleApplyApproved}
           disabled={applyJob?.status === 'running' || !applyCount}
           title="承認済みで未適用のセッションを全件 WP に適用 (タイトル変更時は Gemini アイキャッチ差替)"
@@ -1184,6 +1288,7 @@ export default function RewriteJudgmentView({ showToast }) {
         <span style={{ fontSize: 12, color: '#888' }}>{items.length}件</span>
       </div>
 
+      <ResumePolicyPanel job={resumeJob} />
       <ApplyApprovedPanel job={applyJob} />
 
       {loading && items.length === 0 && <div className="loading"><div className="spinner" /> 読み込み中...</div>}

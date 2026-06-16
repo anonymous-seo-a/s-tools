@@ -93,16 +93,13 @@ async function runGenerationPipeline(job, conn) {
   };
 
   // 4. policy_judgment の扱い
-  //   - 通常 (UI 単発生成 / 手動バッチ): smoke と同じく強制承認して生成へ進む。
-  //   - holdOnPolicy (件数指定の自動モード): 致命的判断が必要な記事は Daiki に残す。
-  //     diff 生成・compliance 前に停止し、session を awaiting_policy_judgment のまま据え置く
-  //     (LLM コストも節約。Daiki が policy 承認すれば後から手動生成できる)。
+  //   - 通常 (UI 単発生成 / 手動バッチ): 強制承認して生成へ進む。
+  //   - holdOnPolicy (件数指定の自動モード): 致命的判断が必要でも **diff は生成する**
+  //     (Daiki のレビュー材料になるため)。policy_held フラグで auto-batch の自動適用だけ抑止し、
+  //     全 diff を pending のまま awaiting_diff_judgment に残す。
+  //     (旧実装は diff 生成前に停止していたが、承認すべき差分が無く判定不能になる不具合があった)
   if (analysisRes.status === 'awaiting_policy_judgment') {
-    if (job.options.holdOnPolicy) {
-      job.policy_held = true;
-      job.step = 'held_policy';
-      return { session_id, policy_held: true };
-    }
+    if (job.options.holdOnPolicy) job.policy_held = true;
     conn.prepare(
       `UPDATE master_rewrite_session SET policy_judgment='approved', policy_judgment_at=CURRENT_TIMESTAMP, status='generating' WHERE id=?`
     ).run(session_id);
@@ -635,17 +632,17 @@ async function runBatchRewrite(job) {
         throw e;
       }
       item.session_id = genJob.session_id;
+      item.diff_count = genJob.diff?.diffs_inserted ?? 0;
+      item.violations = genJob.compliance?.total_violations ?? null;
 
-      // 3a. policy 判断要で停止した記事 (auto モードのみ): 致命的判断は Daiki に残す。
+      // 3a. policy 判断要: diff は生成済 (レビュー材料あり)。自動承認も自動適用もせず、
+      //     全 diff を pending のまま awaiting_diff_judgment に残して Daiki の判定に委ねる。
       if (genJob.policy_held) {
         item.status = 'held';
         item.hold_reason = 'policy_judgment';
         consecutiveThrottle = 0;
         continue;
       }
-
-      item.diff_count = genJob.diff?.diffs_inserted ?? 0;
-      item.violations = genJob.compliance?.total_violations ?? null;
 
       // 3b. 自動承認 (基準外は pending のまま = 伺い)
       item.status = 'judging';
@@ -822,6 +819,63 @@ async function runApplyApproved(job) {
       console.error(`[apply-approved ${job.job_id}] session ${item.session_id}:`, e);
     }
     await sleep(800);
+  }
+  job.current_index = job.items.length;
+}
+
+// ─────────────────────────────────────────────────────────────
+// policy 保留セッションの diff 生成 (resume)
+//   auto-batch の旧仕様で diff 未生成のまま awaiting_policy_judgment に残った空セッションを、
+//   policy 承認 → diff 生成 → compliance まで進めて awaiting_diff_judgment にする。
+//   analysis/corpus は収集済みなので Yahoo SERP は叩かない (Sonnet diff 生成のみ)。
+// ─────────────────────────────────────────────────────────────
+const resumePolicyJobs = new Map();
+let activeResumePolicyJobId = null;
+
+function findPolicyHeldSessions() {
+  return open().prepare(
+    `SELECT s.id, s.post_id, s.genre, COUNT(d.id) AS diff_count
+     FROM master_rewrite_session s
+     LEFT JOIN master_rewrite_diff d ON d.session_id = s.id
+     WHERE s.status = 'awaiting_policy_judgment'
+     GROUP BY s.id
+     ORDER BY s.id`
+  ).all();
+}
+
+async function runResumePolicyHeld(job) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < job.items.length; i++) {
+    const item = job.items[i];
+    job.current_index = i;
+    try {
+      const conn = open();
+      const s = conn.prepare(`SELECT id, genre, status FROM master_rewrite_session WHERE id=?`).get(item.session_id);
+      if (!s) { item.status = 'failed'; item.error = 'session not found'; continue; }
+      if (s.status !== 'awaiting_policy_judgment') { item.status = 'skipped'; item.reason = `status=${s.status}`; continue; }
+      // policy 承認 → generating (diff 生成の前提)
+      conn.prepare(
+        `UPDATE master_rewrite_session SET policy_judgment='approved', policy_judgment_at=CURRENT_TIMESTAMP, status='generating' WHERE id=?`
+      ).run(s.id);
+      item.status = 'generating';
+      const diffRes = await runDiffGeneration({ session_id: s.id, genre: s.genre || 'cardloan' });
+      item.diff_count = diffRes.diffs_inserted ?? 0;
+      item.status = 'compliance';
+      const compRes = await runComplianceCheck({ session_id: s.id, enableLayer2: true });
+      item.violations = compRes.total_violations ?? null;
+      item.status = 'done'; // → awaiting_diff_judgment
+    } catch (e) {
+      item.status = 'failed';
+      item.error = e.message || String(e);
+      // 失敗時は awaiting_policy_judgment に戻して再実行可能にする (generating で stuck させない)
+      try {
+        open().prepare(
+          `UPDATE master_rewrite_session SET status='awaiting_policy_judgment' WHERE id=? AND status='generating'`
+        ).run(item.session_id);
+      } catch { /* noop */ }
+      console.error(`[resume-policy ${job.job_id}] session ${item.session_id}:`, e);
+    }
+    await sleep(500);
   }
   job.current_index = job.items.length;
 }
@@ -1247,6 +1301,59 @@ function buildRouter() {
     if (!activeApplyApprovedJobId) return res.status(404).json({ error: 'no apply-approved job' });
     const job = applyApprovedJobs.get(activeApplyApprovedJobId);
     if (!job) return res.status(404).json({ error: 'no apply-approved job' });
+    return res.json(job);
+  });
+
+  // GET /api/rewrite/judgment/resume-policy-held/preview → diff 未生成の policy 保留件数
+  router.get('/resume-policy-held/preview', (_req, res) => {
+    try {
+      const sessions = findPolicyHeldSessions();
+      return res.json({ count: sessions.length, sessions });
+    } catch (e) {
+      console.error('[GET /judgment/resume-policy-held/preview]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/rewrite/judgment/resume-policy-held → policy 保留セッションの diff を一括生成 (背景)
+  router.post('/resume-policy-held', (_req, res) => {
+    try {
+      const busy = isGenerationBusy();
+      if (busy) return res.status(409).json({ error: busy });
+      if (activeResumePolicyJobId) {
+        const j = resumePolicyJobs.get(activeResumePolicyJobId);
+        if (j && j.status === 'running') return res.status(409).json({ error: 'resume が既に実行中です' });
+      }
+      const sessions = findPolicyHeldSessions();
+      if (sessions.length === 0) return res.json({ started: false, total: 0, message: 'policy 保留セッションがありません' });
+      const job_id = `resume-${Date.now()}`;
+      const job = {
+        job_id, status: 'running', total: sessions.length, current_index: 0,
+        items: sessions.map((s) => ({
+          session_id: s.id, post_id: s.post_id, genre: s.genre,
+          status: 'queued', diff_count: null, violations: null, reason: null, error: null,
+        })),
+        started_at: new Date().toISOString(), completed_at: null,
+      };
+      resumePolicyJobs.set(job_id, job);
+      activeResumePolicyJobId = job_id;
+      (async () => {
+        try { await runResumePolicyHeld(job); job.status = 'completed'; }
+        catch (e) { job.status = 'failed'; job.error = e.message || String(e); console.error(`[resume-policy ${job_id}]`, e); }
+        finally { job.completed_at = new Date().toISOString(); }
+      })();
+      return res.status(202).json(job);
+    } catch (e) {
+      console.error('[POST /judgment/resume-policy-held]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/rewrite/judgment/resume-policy-held → 最新 resume ジョブ進捗
+  router.get('/resume-policy-held', (_req, res) => {
+    if (!activeResumePolicyJobId) return res.status(404).json({ error: 'no resume job' });
+    const job = resumePolicyJobs.get(activeResumePolicyJobId);
+    if (!job) return res.status(404).json({ error: 'no resume job' });
     return res.json(job);
   });
 
