@@ -704,6 +704,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   const [autoApply, setAutoApply] = useState(true);
   const [batchJob, setBatchJob] = useState(null);
   const [autoCount, setAutoCount] = useState(10);
+  const [forceRegen, setForceRegen] = useState(false);
 
   const refreshFanouts = async (selectId) => {
     const r = await api.getQueryFanouts();
@@ -764,11 +765,12 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
           } else {
             showToast(`生成失敗: ${j.error}`, 'error');
           }
+          loadCandidates(); // 生成済みになった記事を候補から消す (古い候補の再選択=二重リライト防止)
         }
       } catch (_) {}
     }, 4000);
     return () => clearInterval(t);
-  }, [job, showToast, onSessionCreated]);
+  }, [job, showToast, onSessionCreated, loadCandidates]);
 
   // batch polling
   useEffect(() => {
@@ -868,10 +870,10 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
     const qfid = Number(queryFanoutId);
     if (!Number.isInteger(pid) || pid <= 0) return showToast('post_id を入力してください', 'error');
     if (!Number.isInteger(qfid) || qfid <= 0) return showToast('query_fanout を選択してください', 'error');
-    const ok = confirm(`post_id=${pid} query_fanout=${qfid} で生成します。\n推定: Opus + Sonnet${enableCompliance ? ' + Layer 2 compliance' : ''} = 約 $0.6 / 3 分。続行?`);
+    const ok = confirm(`post_id=${pid} query_fanout=${qfid} で生成します。${forceRegen ? '\n⚠ 強制再生成: 既リライト記事でも二重生成します。' : ''}\n推定: Opus + Sonnet${enableCompliance ? ' + Layer 2 compliance' : ''} = 約 $0.6 / 3 分。続行?`);
     if (!ok) return;
     try {
-      const j = await api.startGenerationJob({ post_id: pid, query_fanout_id: qfid, enableCompliance, genre });
+      const j = await api.startGenerationJob({ post_id: pid, query_fanout_id: qfid, enableCompliance, genre, force: forceRegen });
       setJob(j);
       showToast('生成開始');
     } catch (e) {
@@ -926,6 +928,10 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
         <label style={{ fontSize: 12, color: '#666' }}>
           <input type="checkbox" checked={enableCompliance} onChange={(e) => setEnableCompliance(e.target.checked)} disabled={running} style={{ marginRight: 4, width: 'auto' }} />
           compliance 実行
+        </label>
+        <label style={{ fontSize: 12, color: forceRegen ? '#c62828' : '#666' }} title="既にリライト済みの記事でも二重生成を許可します (通常は OFF で二重リライトを防止)">
+          <input type="checkbox" checked={forceRegen} onChange={(e) => setForceRegen(e.target.checked)} disabled={running} style={{ marginRight: 4, width: 'auto' }} />
+          強制再生成
         </label>
         <button className="btn-apply btn-small" onClick={handleStart} disabled={running || genreDisabled}>
           {running ? '生成中...' : '生成'}

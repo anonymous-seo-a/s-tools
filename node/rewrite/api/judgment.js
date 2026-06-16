@@ -35,6 +35,21 @@ function genreDisabledResponse(res, genre) {
 async function runGenerationPipeline(job, conn) {
   const { post_id, query_fanout_id, enableCompliance, genre = 'cardloan' } = job.options;
 
+  // 0. 重複ガード: 同じ post に未失敗のセッションが既にあれば二重リライトしない。
+  //   候補リスト(fetchRewriteCandidates)も除外するが、UI が古い/手動 post_id 指定でも
+  //   二重生成を防ぐ最終防壁。意図的な再リライトは options.force で上書き可。
+  if (!job.options.force) {
+    const dup = conn.prepare(
+      `SELECT id, status FROM master_rewrite_session
+       WHERE post_id=? AND status NOT IN ('failed','cancelled') ORDER BY id DESC LIMIT 1`
+    ).get(post_id);
+    if (dup) {
+      const e = new Error(`post ${post_id} は既にリライト済み/進行中 (session #${dup.id}, status=${dup.status})。再リライトは既存セッションを取消すか force 指定が必要。`);
+      e.duplicate = true;
+      throw e;
+    }
+  }
+
   // 1. session INSERT
   job.step = 'session_init';
   const m = getModels();
@@ -654,6 +669,13 @@ async function runBatchRewrite(job) {
       }
       consecutiveThrottle = 0;
     } catch (e) {
+      // 重複ガード由来は「中断」ではなく「スキップ(既リライト)」として扱う。
+      if (e.duplicate) {
+        item.status = 'skipped';
+        item.error = e.message || String(e);
+        consecutiveThrottle = 0;
+        continue;
+      }
       item.status = 'failed';
       item.error = e.message || String(e);
       if (isThrottleError(item.error)) consecutiveThrottle++;
@@ -965,7 +987,7 @@ function buildRouter() {
         job_id,
         status: 'running',
         step: 'init',
-        options: { post_id, query_fanout_id, enableCompliance, genre },
+        options: { post_id, query_fanout_id, enableCompliance, genre, force: body.force === true },
         session_id: null,
         analysis: null,
         diff: null,
