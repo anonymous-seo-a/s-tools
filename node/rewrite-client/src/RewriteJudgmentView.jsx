@@ -1026,12 +1026,61 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   );
 }
 
+const APPLY_ITEM_LABEL = {
+  queued: { label: '待機', badge: 'pending' },
+  applying: { label: 'WP適用中', badge: 'pending' },
+  done: { label: '適用完了', badge: 'approved' },
+  skipped: { label: '適用対象なし', badge: 'applied' },
+  failed: { label: '失敗', badge: 'rejected' },
+};
+
+function ApplyApprovedPanel({ job }) {
+  if (!job || !job.items) return null;
+  const done = job.items.filter((it) => ['done', 'skipped', 'failed'].includes(it.status)).length;
+  const applied = job.items.filter((it) => it.applied).length;
+  const eye = job.items.filter((it) => it.eyecatch).length;
+  const failed = job.items.filter((it) => it.status === 'failed').length;
+  return (
+    <div style={{ margin: '0 0 12px', padding: '10px 12px', background: 'white', border: '1px solid #1565c0', borderRadius: 8, fontSize: 12 }}>
+      <div style={{ marginBottom: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>承認済みの一括 WP 適用</strong>
+        <span className={`status-badge ${job.status === 'completed' ? 'approved' : job.status === 'failed' ? 'rejected' : 'pending'}`}>
+          {job.status === 'running' ? `実行中 ${done}/${job.total}` : job.status}
+        </span>
+        {job.status !== 'running' && (
+          <span style={{ display: 'flex', gap: 8 }}>
+            <span style={{ color: '#1565c0' }}>WP適用 {applied}</span>
+            <span style={{ color: '#6a1b9a' }}>アイキャッチ差替 {eye}</span>
+            <span style={{ color: '#c62828' }}>失敗 {failed}</span>
+          </span>
+        )}
+      </div>
+      {job.items.map((it) => {
+        const st = APPLY_ITEM_LABEL[it.status] || { label: it.status, badge: 'pending' };
+        return (
+          <div key={it.session_id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #f5f5f5' }}>
+            <span style={{ width: 64, color: '#888', flexShrink: 0 }}>s#{it.session_id}</span>
+            <span style={{ width: 76, color: '#888', flexShrink: 0 }}>post {it.post_id}</span>
+            <span className={`status-badge ${st.badge}`} style={{ flexShrink: 0 }}>{st.label}</span>
+            {it.applied && <span style={{ color: '#1565c0', flexShrink: 0 }}>適用 {it.applied_count}</span>}
+            {it.eyecatch && <span style={{ color: '#6a1b9a', flexShrink: 0 }}>🖼 アイキャッチ差替</span>}
+            {it.reason && <span style={{ color: '#888', flex: 1, minWidth: 0 }}>{it.reason}</span>}
+            {it.error && <span style={{ color: '#c62828', flex: 1, minWidth: 0 }}>{it.error}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function RewriteJudgmentView({ showToast }) {
   const [status, setStatus] = useState('awaiting_diff_judgment');
   const [genre, setGenre] = useState('cardloan');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+  const [applyJob, setApplyJob] = useState(null);
+  const [applyCount, setApplyCount] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1047,7 +1096,54 @@ export default function RewriteJudgmentView({ showToast }) {
     setLoading(false);
   }, [status, genre, selectedId, showToast]);
 
+  const loadApplyCount = useCallback(() => {
+    api.previewApplyApproved().then((r) => setApplyCount(r.count)).catch(() => setApplyCount(null));
+  }, []);
+
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status, genre]);
+  useEffect(() => {
+    loadApplyCount();
+    api.getApplyApproved().then(setApplyJob).catch(() => {});
+  }, [loadApplyCount]);
+
+  // 一括適用ジョブのポーリング
+  useEffect(() => {
+    if (!applyJob || applyJob.status !== 'running') return;
+    const t = setInterval(async () => {
+      try {
+        const j = await api.getApplyApproved();
+        setApplyJob(j);
+        if (j.status !== 'running') {
+          clearInterval(t);
+          const applied = j.items.filter((it) => it.applied).length;
+          const eye = j.items.filter((it) => it.eyecatch).length;
+          const failed = j.items.filter((it) => it.status === 'failed').length;
+          showToast(`一括WP適用完了: 適用 ${applied} / アイキャッチ差替 ${eye} / 失敗 ${failed} (全${j.total}件)`);
+          load();
+          loadApplyCount();
+        }
+      } catch (_) { /* noop */ }
+    }, 4000);
+    return () => clearInterval(t);
+  }, [applyJob, showToast, load, loadApplyCount]);
+
+  const handleApplyApproved = async () => {
+    if (!applyCount) return showToast('適用対象の承認済みセッションがありません', 'error');
+    const ok = confirm(
+      `承認済みで未適用の ${applyCount} セッションを WP に一括適用します。\n` +
+      `タイトル変更を含む記事は Gemini で 16:9 アイキャッチを生成し、featured 画像を差し替えます。\n` +
+      `(停止中ジャンル cardloan は対象外)。続行?`
+    );
+    if (!ok) return;
+    try {
+      const j = await api.startApplyApproved();
+      if (j.started === false) { showToast(j.message || '対象なし'); loadApplyCount(); return; }
+      setApplyJob(j);
+      showToast(`一括WP適用開始 (${j.total}件)`);
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
 
   return (
     <div>
@@ -1070,8 +1166,19 @@ export default function RewriteJudgmentView({ showToast }) {
         <button className="btn-secondary btn-small" onClick={load} disabled={loading}>
           {loading ? '読込中...' : '再読込'}
         </button>
-        <span style={{ fontSize: 12, color: '#888', marginLeft: 'auto' }}>{items.length}件</span>
+        <button
+          className="btn-apply btn-small"
+          style={{ marginLeft: 'auto', background: '#1565c0' }}
+          onClick={handleApplyApproved}
+          disabled={applyJob?.status === 'running' || !applyCount}
+          title="承認済みで未適用のセッションを全件 WP に適用 (タイトル変更時は Gemini アイキャッチ差替)"
+        >
+          {applyJob?.status === 'running' ? '一括適用中...' : `承認済みを一括WP適用${applyCount ? ` (${applyCount}件)` : ''}`}
+        </button>
+        <span style={{ fontSize: 12, color: '#888' }}>{items.length}件</span>
       </div>
+
+      <ApplyApprovedPanel job={applyJob} />
 
       {loading && items.length === 0 && <div className="loading"><div className="spinner" /> 読み込み中...</div>}
       {!loading && items.length === 0 && <div className="loading">対象セッションがありません</div>}

@@ -11,6 +11,7 @@ const { planGutenbergApply, applyGutenbergOps, htmlToBlocks } = require('../appl
 const { classifyDomain, collectCompetitorCorpus } = require('../competitor-corpus/collect');
 const { extractForQueryFanout } = require('../fact-set/extract');
 const { calcIgScore } = require('../fact-set/ig-score');
+const { generateEyecatch } = require('../../shared/gemini-image');
 
 // in-memory job ストア (server プロセス再起動で消失、明示再実行で再投入)
 //   key: session_id (number) → compliance job
@@ -163,6 +164,47 @@ async function updateWpPost(postId, payload) {
     throw new Error(`WP update ${postId}: HTTP ${res.status} ${t.slice(0, 200)}`);
   }
   return res.json();
+}
+
+// PNG Buffer を WP メディアにアップロードし、media id を返す。
+async function uploadWpMedia(buffer, filename, { mimeType = 'image/png', altText = '', title = '' } = {}) {
+  const res = await fetch(`${wpBase()}/media`, {
+    method: 'POST',
+    headers: {
+      Authorization: wpAuthHeader(),
+      'Content-Type': mimeType,
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    },
+    body: buffer,
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`WP media upload: HTTP ${res.status} ${t.slice(0, 200)} (upload_files 権限を確認)`);
+  }
+  const media = await res.json();
+  // alt / title を補完 (任意・失敗は無視)
+  if ((altText || title) && media.id) {
+    try {
+      await fetch(`${wpBase()}/media/${media.id}`, {
+        method: 'POST',
+        headers: { Authorization: wpAuthHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alt_text: altText || title, title }),
+      });
+    } catch { /* noop */ }
+  }
+  return { id: media.id, source_url: media.source_url };
+}
+
+// 新タイトルから 16:9 アイキャッチを Gemini 生成 → WP メディア化 → featured_media に設定。
+// 失敗しても本文適用は壊さない (呼び出し側で try/catch して skipped 報告)。
+async function applyEyecatchForTitle(postId, { title, contentRaw, genre }) {
+  const img = await generateEyecatch({ title, contentRaw, genre });
+  // 拡張子は mimeType に合わせる (WP は Content-Type と拡張子の不一致を弾くため)。
+  const ext = img.mimeType === 'image/png' ? 'png' : img.mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const safeName = `eyecatch-${postId}-${Date.now()}.${ext}`;
+  const media = await uploadWpMedia(img.buffer, safeName, { mimeType: img.mimeType, title, altText: title });
+  await updateWpPost(postId, { featured_media: media.id });
+  return { media_id: media.id, source_url: media.source_url };
 }
 
 // title diff の content_after からタイトル文字列を取り出す (<title>…</title> or 素テキスト)。
@@ -467,6 +509,13 @@ function diffHasViolations(rationale) {
   }
 }
 
+// 自動承認の許容セット (2026-06-16 Daiki 指示で緩和: 旧 risk=none × conf=high のみ → 下記)。
+//   - risk_flag: none / low まで許可 (medium 以上は held)
+//   - llm_confidence: high / medium まで許可 (low は held)
+//   - compliance 違反は引き続きハードブロック (YMYL 法令ライン)
+const AUTO_RISK_OK = new Set([null, undefined, '', 'none', 'low']);
+const AUTO_CONF_OK = new Set(['high', 'medium']);
+
 function autoJudgeSession(sessionId) {
   const conn = open();
   const diffs = conn.prepare(
@@ -479,10 +528,10 @@ function autoJudgeSession(sessionId) {
   let autoApproved = 0;
   const held = [];
   for (const d of diffs) {
-    const riskFree = !d.risk_flag || d.risk_flag === 'none';
-    const confident = d.llm_confidence === 'high';
+    const riskOk = AUTO_RISK_OK.has(d.risk_flag);
+    const confident = AUTO_CONF_OK.has(d.llm_confidence);
     const clean = !diffHasViolations(d.rationale);
-    if (riskFree && confident && clean) {
+    if (riskOk && confident && clean) {
       approve.run(d.id);
       autoApproved++;
     } else {
@@ -490,7 +539,7 @@ function autoJudgeSession(sessionId) {
         diff_id: d.id,
         reasons: [
           !clean && 'compliance違反',
-          !riskFree && `risk:${d.risk_flag}`,
+          !riskOk && `risk:${d.risk_flag}`,
           !confident && `conf:${d.llm_confidence}`,
         ].filter(Boolean),
       });
@@ -621,7 +670,7 @@ async function runBatchRewrite(job) {
 // ─────────────────────────────────────────────────────────────
 async function applySessionCore(id, { dryRun = false } = {}) {
   const conn = open();
-  const session = conn.prepare(`SELECT id, post_id, status, wp_apply_completed_at FROM master_rewrite_session WHERE id=?`).get(id);
+  const session = conn.prepare(`SELECT id, post_id, status, genre, wp_apply_completed_at FROM master_rewrite_session WHERE id=?`).get(id);
   if (!session) { const e = new Error('session not found'); e.httpStatus = 404; throw e; }
   if (!dryRun && session.wp_apply_completed_at) {
     const e = new Error('already applied'); e.httpStatus = 409; throw e;
@@ -660,6 +709,19 @@ async function applySessionCore(id, { dryRun = false } = {}) {
   if (meta.newTitle) payload.title = meta.newTitle;
   await updateWpPost(session.post_id, payload);
 
+  // タイトル差し替え時: Gemini で 16:9 アイキャッチ生成 → featured_media に差し替え。
+  // 画像生成/アップロード失敗は本文適用を壊さず skipped に記録 (graceful)。
+  let eyecatch = null;
+  if (meta.newTitle) {
+    try {
+      eyecatch = await applyEyecatchForTitle(session.post_id, {
+        title: meta.newTitle, contentRaw: wp.content_raw, genre: session.genre || 'cardloan',
+      });
+    } catch (e) {
+      skipped.push({ diff_id: null, reason: `アイキャッチ生成/差替に失敗: ${e.message}` });
+    }
+  }
+
   // meta description は AIOSEO mu-plugin 経由 (未配置なら skip 扱い)。
   let metaDescApplied = true;
   if (meta.newMetaDesc) {
@@ -687,7 +749,59 @@ async function applySessionCore(id, { dryRun = false } = {}) {
     dry_run: false, post_id: session.post_id, applied: true,
     planned, skipped, applied_count: appliedIds.length,
     conflicts: applied.conflicts,
+    eyecatch,
   };
+}
+
+// ─────────────────────────────────────────────────────────────
+// 承認済み変更の一括 WP 適用
+//   承認 diff を持ち未適用のセッションを全件 applySessionCore で適用する。
+//   停止ジャンル (cardloan) は対象外。直列・1記事失敗は記録して継続。
+// ─────────────────────────────────────────────────────────────
+const applyApprovedJobs = new Map();
+let activeApplyApprovedJobId = null;
+
+function findApprovedUnappliedSessions() {
+  const conn = open();
+  const rows = conn.prepare(`
+    SELECT s.id, s.post_id, s.genre,
+           SUM(CASE WHEN d.daiki_judgment='approved' THEN 1 ELSE 0 END) AS approved_count
+    FROM master_rewrite_session s
+    JOIN master_rewrite_diff d ON d.session_id = s.id
+    WHERE s.wp_apply_completed_at IS NULL
+      AND s.status NOT IN ('failed','cancelled')
+    GROUP BY s.id
+    HAVING approved_count > 0
+    ORDER BY s.id
+  `).all();
+  return rows.filter((r) => !DISABLED_REWRITE_GENRES.has(r.genre));
+}
+
+async function runApplyApproved(job) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < job.items.length; i++) {
+    const item = job.items[i];
+    job.current_index = i;
+    try {
+      item.status = 'applying';
+      const r = await applySessionCore(item.session_id, { dryRun: false });
+      item.applied = !!r.applied;
+      item.applied_count = r.applied_count || 0;
+      item.eyecatch = !!r.eyecatch;
+      if (r.applied) {
+        item.status = 'done';
+      } else {
+        item.status = 'skipped';
+        item.reason = r.reason || 'no diffs to apply';
+      }
+    } catch (e) {
+      item.status = 'failed';
+      item.error = e.message || String(e);
+      console.error(`[apply-approved ${job.job_id}] session ${item.session_id}:`, e);
+    }
+    await sleep(800);
+  }
+  job.current_index = job.items.length;
 }
 
 function updateDiffJudgment(id, { judgment, reject_reason, reject_note, edit_content }) {
@@ -1049,6 +1163,68 @@ function buildRouter() {
     if (!activeBatchJobId) return res.status(404).json({ error: 'no batch job' });
     const job = batchJobs.get(activeBatchJobId);
     if (!job) return res.status(404).json({ error: 'no batch job' });
+    return res.json(job);
+  });
+
+  // GET /api/rewrite/judgment/apply-approved/preview → 適用対象 (承認済み未適用) の件数と一覧
+  router.get('/apply-approved/preview', (_req, res) => {
+    try {
+      const sessions = findApprovedUnappliedSessions();
+      return res.json({
+        count: sessions.length,
+        total_diffs: sessions.reduce((s, r) => s + r.approved_count, 0),
+        sessions,
+      });
+    } catch (e) {
+      console.error('[GET /judgment/apply-approved/preview]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/rewrite/judgment/apply-approved → 承認済み未適用セッションを一括 WP 適用 (背景実行)
+  router.post('/apply-approved', (_req, res) => {
+    try {
+      if (activeApplyApprovedJobId) {
+        const j = applyApprovedJobs.get(activeApplyApprovedJobId);
+        if (j && j.status === 'running') return res.status(409).json({ error: '一括適用が既に実行中です' });
+      }
+      const sessions = findApprovedUnappliedSessions();
+      if (sessions.length === 0) {
+        return res.json({ started: false, total: 0, message: '適用対象の承認済みセッションがありません' });
+      }
+      const job_id = `applyall-${Date.now()}`;
+      const job = {
+        job_id,
+        status: 'running',
+        total: sessions.length,
+        current_index: 0,
+        items: sessions.map((s) => ({
+          session_id: s.id, post_id: s.post_id, genre: s.genre,
+          approved_count: s.approved_count, status: 'queued',
+          applied: false, applied_count: 0, eyecatch: false, reason: null, error: null,
+        })),
+        started_at: new Date().toISOString(),
+        completed_at: null,
+      };
+      applyApprovedJobs.set(job_id, job);
+      activeApplyApprovedJobId = job_id;
+      (async () => {
+        try { await runApplyApproved(job); job.status = 'completed'; }
+        catch (e) { job.status = 'failed'; job.error = e.message || String(e); console.error(`[apply-approved ${job_id}]`, e); }
+        finally { job.completed_at = new Date().toISOString(); }
+      })();
+      return res.status(202).json(job);
+    } catch (e) {
+      console.error('[POST /judgment/apply-approved]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/rewrite/judgment/apply-approved → 最新の一括適用ジョブ進捗
+  router.get('/apply-approved', (_req, res) => {
+    if (!activeApplyApprovedJobId) return res.status(404).json({ error: 'no apply-approved job' });
+    const job = applyApprovedJobs.get(activeApplyApprovedJobId);
+    if (!job) return res.status(404).json({ error: 'no apply-approved job' });
     return res.json(job);
   });
 

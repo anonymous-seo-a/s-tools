@@ -178,6 +178,10 @@ export const api = {
   startAutoBatch: (body) =>
     request('/api/rewrite/judgment/auto-batch', { method: 'POST', body: JSON.stringify(body) }),
   getBatchRewrite: () => request('/api/rewrite/judgment/batch'),
+  // 承認済み変更の一括 WP 適用 (背景実行)
+  previewApplyApproved: () => request('/api/rewrite/judgment/apply-approved/preview'),
+  startApplyApproved: () => request('/api/rewrite/judgment/apply-approved', { method: 'POST' }),
+  getApplyApproved: () => request('/api/rewrite/judgment/apply-approved'),
   getQueryFanouts: () =>
     request('/api/rewrite/judgment/query-fanouts'),
 
