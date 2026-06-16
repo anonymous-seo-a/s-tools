@@ -17,7 +17,8 @@ const ENDPOINT = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
 // content_raw (Gutenberg/HTML) から本文の要旨を平文で抽出 (画像の視覚テーマ用、最大 maxLen 文字)。
-function summarizeContent(contentRaw, maxLen = 400) {
+// リッチなアイキャッチには文脈量が要るので長めに渡す (テキスト入力は安価)。
+function summarizeContent(contentRaw, maxLen = 1800) {
   if (!contentRaw) return '';
   const text = String(contentRaw)
     .replace(/<!--[\s\S]*?-->/g, ' ')   // Gutenberg ブロックコメント除去
@@ -28,23 +29,40 @@ function summarizeContent(contentRaw, maxLen = 400) {
   return text.slice(0, maxLen);
 }
 
-// タイトル + 本文要旨 + ジャンルから英語の画像生成プロンプトを組む。
+const GENRE_THEME = {
+  cardloan: 'カードローン・消費者金融',
+  securities: '証券・株式投資',
+  cryptocurrency: '仮想通貨・暗号資産',
+  fx: 'FX・外国為替',
+  realestate: '不動産投資',
+};
+
+// 記事内容を渡して「この記事向けの SEO アフィリエイト用アイキャッチ」を作らせる。
+// 日本の金融アフィリエイトメディアの実物 (濃紺ブランド背景 / フラットイラスト / 短い
+// キャッチコピー + アクセント色キーワード / 要点チップ / 年バッジ) に寄せたプロンプト。
+// 旧版は「タイトル全文を大きく描画」と指示したため長文タイトルが重複・崩れていた → 短い
+// 見出しに圧縮させ、文字崩れ・重複を明示的に禁止する。
 function buildEyecatchPrompt({ title, contentSummary, genre }) {
-  const genreTheme = {
-    cardloan: 'consumer finance / card loans',
-    securities: 'stock investment / securities',
-    cryptocurrency: 'cryptocurrency / digital assets',
-    fx: 'foreign exchange / FX trading',
-    realestate: 'real estate investment',
-  }[genre] || 'personal finance';
+  const theme = GENRE_THEME[genre] || 'パーソナルファイナンス';
   return [
-    'Create a professional 16:9 hero / eyecatch image for a Japanese financial media article.',
-    `Render this Japanese title text prominently, large and clearly legible on the image: 「${title}」.`,
-    `Article theme: ${genreTheme}.`,
-    contentSummary ? `Visual should reflect the content: ${contentSummary}` : '',
-    'Style: clean, modern, trustworthy financial-media aesthetic; soft gradient or subtle abstract background;',
-    'high-contrast, accurate, readable Japanese typography for the title; no watermarks, no logos, no gibberish text.',
-  ].filter(Boolean).join('\n');
+    '以下の記事に最適化した、SEO アフィリエイトサイト用のプロ品質アイキャッチ画像を 16:9 のアスペクト比で作成してください。',
+    '',
+    `【ジャンル】${theme}`,
+    `【記事タイトル】${title}`,
+    contentSummary ? `【記事の内容（抜粋）】${contentSummary}` : '',
+    '',
+    '【デザイン要件（日本の金融アフィリエイトメディアの定番スタイル）】',
+    '- フラットなベクターイラスト調。記事テーマに合った人物・アイコン・モチーフ（スマホ/カード/グラフ/建物等）を配置',
+    '- 背景は濃紺〜ブルー基調のブランドカラーで、信頼感・清潔感のある配色',
+    '- 記事の要点を端的に表す「短いキャッチコピー」を主役にする。タイトルを長文のまま全部入れず、最も重要なキーワードだけ大きく、数字や訴求語はアクセントカラー（黄/オレンジ等）で強調',
+    '- 要点を表す小さなチップ/バッジ（2〜4個）や「2026年最新」等の年バッジを添えて情報量を持たせる',
+    '- レイアウトは左にテキスト、右にイラストのような明快な構図。余白と階層を意識した完成度の高いデザイン',
+    '',
+    '【厳守】',
+    '- 日本語の文字は正確に。文字の重複・崩れ・意味不明な文字列・スペルミスを絶対に入れない',
+    '- 同じ語句を繰り返さない。読みやすいフォントと高コントラスト',
+    '- ロゴ・透かし・URL・人物の顔のアップは入れない',
+  ].filter((l) => l !== undefined && l !== null).join('\n');
 }
 
 /**

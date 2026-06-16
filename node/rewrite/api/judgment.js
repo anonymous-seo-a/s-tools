@@ -1250,6 +1250,29 @@ function buildRouter() {
     return res.json(job);
   });
 
+  // POST /api/rewrite/judgment/regenerate-eyecatch  body:{ post_id, genre? }
+  //   既存記事の現タイトル+本文から 16:9 アイキャッチを再生成し featured_media を差替える。
+  //   旧プロンプトで生成した低品質アイキャッチの貼り直し / 手動再生成に使う。
+  router.post('/regenerate-eyecatch', async (req, res) => {
+    try {
+      const postId = Number(req.body && req.body.post_id);
+      if (!Number.isInteger(postId) || postId <= 0) return res.status(400).json({ error: 'post_id (positive integer) required' });
+      let genre = typeof (req.body && req.body.genre) === 'string' ? req.body.genre : null;
+      if (!genre) {
+        const s = open().prepare(
+          `SELECT genre FROM master_rewrite_session WHERE post_id=? AND genre IS NOT NULL ORDER BY id DESC LIMIT 1`
+        ).get(postId);
+        genre = (s && s.genre) || 'cardloan';
+      }
+      const wp = await fetchWpPost(postId);
+      const r = await applyEyecatchForTitle(postId, { title: wp.title_raw, contentRaw: wp.content_raw, genre });
+      return res.json({ post_id: postId, genre, ...r });
+    } catch (e) {
+      console.error('[POST /judgment/regenerate-eyecatch]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   // GET /api/rewrite/judgment/query-fanouts  → 候補リスト
   router.get('/query-fanouts', (_req, res) => {
     try {
