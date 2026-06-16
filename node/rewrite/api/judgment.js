@@ -66,8 +66,17 @@ async function runGenerationPipeline(job, conn) {
     high_risk_categories: analysisRes.high_risk_categories,
   };
 
-  // 4. policy_judgment 自動 approved (UI 生成は smoke と同じく強制承認)
+  // 4. policy_judgment の扱い
+  //   - 通常 (UI 単発生成 / 手動バッチ): smoke と同じく強制承認して生成へ進む。
+  //   - holdOnPolicy (件数指定の自動モード): 致命的判断が必要な記事は Daiki に残す。
+  //     diff 生成・compliance 前に停止し、session を awaiting_policy_judgment のまま据え置く
+  //     (LLM コストも節約。Daiki が policy 承認すれば後から手動生成できる)。
   if (analysisRes.status === 'awaiting_policy_judgment') {
+    if (job.options.holdOnPolicy) {
+      job.policy_held = true;
+      job.step = 'held_policy';
+      return { session_id, policy_held: true };
+    }
     conn.prepare(
       `UPDATE master_rewrite_session SET policy_judgment='approved', policy_judgment_at=CURRENT_TIMESTAMP, status='generating' WHERE id=?`
     ).run(session_id);
@@ -490,7 +499,8 @@ function autoJudgeSession(sessionId) {
 // ─────────────────────────────────────────────────────────────
 const batchJobs = new Map(); // job_id → state
 let activeBatchJobId = null;
-const BATCH_MAX_POSTS = 20;
+const BATCH_MAX_POSTS = 20;       // 手動 (post_ids 指定) バッチの上限
+const AUTO_BATCH_MAX_POSTS = 50;  // 件数指定の自動モードの上限
 
 function isGenerationBusy() {
   if (activeGenerationJobId) {
@@ -512,7 +522,7 @@ function isThrottleError(msg) {
 }
 
 async function runBatchRewrite(job) {
-  const { genre, enableCompliance, autoApply } = job.options;
+  const { genre, enableCompliance, autoApply, holdOnPolicy } = job.options;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let consecutiveThrottle = 0;
   for (let i = 0; i < job.items.length; i++) {
@@ -532,8 +542,8 @@ async function runBatchRewrite(job) {
       // 2. 一気通貫生成 (session_init → corpus → analysis → diff → compliance)
       item.status = 'generating';
       const genJob = {
-        options: { post_id: item.post_id, query_fanout_id: prep.query_fanout_id, enableCompliance, genre },
-        session_id: null, step: 'init', analysis: null, diff: null, compliance: null,
+        options: { post_id: item.post_id, query_fanout_id: prep.query_fanout_id, enableCompliance, genre, holdOnPolicy },
+        session_id: null, step: 'init', analysis: null, diff: null, compliance: null, policy_held: false,
       };
       try {
         await runGenerationPipeline(genJob, open());
@@ -551,10 +561,19 @@ async function runBatchRewrite(job) {
         throw e;
       }
       item.session_id = genJob.session_id;
+
+      // 3a. policy 判断要で停止した記事 (auto モードのみ): 致命的判断は Daiki に残す。
+      if (genJob.policy_held) {
+        item.status = 'held';
+        item.hold_reason = 'policy_judgment';
+        consecutiveThrottle = 0;
+        continue;
+      }
+
       item.diff_count = genJob.diff?.diffs_inserted ?? 0;
       item.violations = genJob.compliance?.total_violations ?? null;
 
-      // 3. 自動承認 (基準外は pending のまま = 伺い)
+      // 3b. 自動承認 (基準外は pending のまま = 伺い)
       item.status = 'judging';
       const judged = autoJudgeSession(genJob.session_id);
       item.auto_approved = judged.auto_approved;
@@ -570,6 +589,7 @@ async function runBatchRewrite(job) {
         item.status = 'done';
       } else if (judged.held.length > 0) {
         item.status = 'held'; // 伺い: 判定タブで pending diff を確認
+        item.hold_reason = 'held_diff';
       } else {
         item.status = 'done'; // autoApply off or approved 0 (適用対象なし)
       }
@@ -935,6 +955,77 @@ function buildRouter() {
       return res.status(202).json(job);
     } catch (e) {
       console.error('[POST /judgment/batch]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/rewrite/judgment/auto-batch
+  //   body: { count: number, genre, enableCompliance?: true }
+  //   件数指定の全自動モード: 候補 (順位11-20 × impr 降順 × 未リライト) を count 件 自動ピックし、
+  //   生成 → 自動承認 → WP 反映 まで一気通貫。ただし「致命的判断が必要な記事」は除外:
+  //     - policy 判断要 (high_risk_categories 有り) → diff 生成前に停止し held(policy)
+  //     - 自動承認外の diff (risk有/conf≠high/compliance違反) を含む → 適用せず held(held_diff)
+  //   除外された記事は判定タブで Daiki が確認する。クリーンな記事のみ自動反映される。
+  router.post('/auto-batch', async (req, res) => {
+    try {
+      const busy = isGenerationBusy();
+      if (busy) return res.status(409).json({ error: busy });
+
+      const body = req.body || {};
+      const genre = typeof body.genre === 'string' ? body.genre : 'cardloan';
+      let count = parseInt(body.count, 10);
+      if (!Number.isInteger(count) || count <= 0) {
+        return res.status(400).json({ error: 'count (positive integer) required' });
+      }
+      const capped = count > AUTO_BATCH_MAX_POSTS;
+      count = Math.min(count, AUTO_BATCH_MAX_POSTS);
+      const enableCompliance = body.enableCompliance !== false;
+
+      // 候補を自動ピック (既リライト記事は fetchRewriteCandidates 内で除外済み)
+      const candidates = await fetchRewriteCandidates(genre, count);
+      if (candidates.length === 0) {
+        return res.status(404).json({ error: '候補記事が見つかりません (順位11-20 / impr≥500 / 未リライト)' });
+      }
+
+      const job_id = `auto-${Date.now()}`;
+      const job = {
+        job_id,
+        mode: 'auto',
+        status: 'running',
+        options: { genre, enableCompliance, autoApply: true, holdOnPolicy: true },
+        requested_count: count,
+        capped,
+        total: candidates.length,
+        current_index: 0,
+        items: candidates.map((c) => ({
+          post_id: c.post_id, title: c.title, url: c.url,
+          avg_rank: c.avg_rank, impressions: c.impressions,
+          status: 'queued', session_id: null, diff_count: null, violations: null,
+          auto_approved: null, held: null, held_details: null, hold_reason: null,
+          applied: false, applied_count: 0, error: null,
+        })),
+        started_at: new Date().toISOString(),
+        completed_at: null,
+      };
+      batchJobs.set(job_id, job);
+      activeBatchJobId = job_id;
+
+      (async () => {
+        try {
+          await runBatchRewrite(job);
+          job.status = 'completed';
+        } catch (e) {
+          job.status = 'failed';
+          job.error = e.message || String(e);
+          console.error(`[auto-batch job ${job_id}]`, e);
+        } finally {
+          job.completed_at = new Date().toISOString();
+        }
+      })();
+
+      return res.status(202).json(job);
+    } catch (e) {
+      console.error('[POST /judgment/auto-batch]', e);
       return res.status(500).json({ error: e.message });
     }
   });

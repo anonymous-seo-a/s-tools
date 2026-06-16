@@ -621,19 +621,39 @@ const BATCH_ITEM_LABEL = {
   skipped:    { label: '中断スキップ',    badge: 'rejected' },
 };
 
+const HOLD_REASON_LABEL = {
+  policy_judgment: 'policy判断要',
+  held_diff: '伺いdiff有',
+};
+
 function BatchPanel({ job, onRetry }) {
   if (!job) return null;
+  const isAuto = job.mode === 'auto';
   const doneCount = job.items.filter((it) => ['done', 'held', 'failed', 'skipped'].includes(it.status)).length;
   const retryIds = job.status !== 'running'
     ? job.items.filter((it) => it.status === 'failed' || it.status === 'skipped').map((it) => it.post_id)
     : [];
+  // 完了サマリ (auto/手動共通)
+  const appliedN = job.items.filter((it) => it.applied).length;
+  const policyN = job.items.filter((it) => it.hold_reason === 'policy_judgment').length;
+  const heldDiffN = job.items.filter((it) => it.hold_reason === 'held_diff').length;
+  const failedN = job.items.filter((it) => it.status === 'failed' || it.status === 'skipped').length;
+  const accent = isAuto ? '#66bb6a' : '#fbc02d';
   return (
-    <div style={{ padding: '10px 12px', background: 'white', borderTop: '1px solid #fbc02d', fontSize: 12 }}>
+    <div style={{ padding: '10px 12px', background: 'white', borderTop: `1px solid ${accent}`, fontSize: 12 }}>
       <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <strong>一括リライト</strong>
+        <strong>{isAuto ? '⚡ 全自動モード' : '一括リライト'}</strong>
         <span className={`status-badge ${job.status === 'completed' ? 'approved' : job.status === 'failed' ? 'rejected' : 'pending'}`}>
           {job.status === 'running' ? `実行中 ${doneCount}/${job.total}` : job.status}
         </span>
+        {job.status !== 'running' && (
+          <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ color: '#1565c0' }}>WP反映 {appliedN}</span>
+            <span style={{ color: '#6a1b9a' }}>policy保留 {policyN}</span>
+            <span style={{ color: '#f57f17' }}>伺いdiff {heldDiffN}</span>
+            <span style={{ color: '#c62828' }}>失敗 {failedN}</span>
+          </span>
+        )}
         <span style={{ color: '#888' }}>
           自動承認基準: violationsなし × riskなし × confidence high / 基準外は「伺い」として判定待ちに残る
         </span>
@@ -645,16 +665,21 @@ function BatchPanel({ job, onRetry }) {
       </div>
       {job.items.map((it) => {
         const st = BATCH_ITEM_LABEL[it.status] || { label: it.status, badge: 'pending' };
+        const holdLabel = it.status === 'held' ? HOLD_REASON_LABEL[it.hold_reason] : null;
         return (
           <div key={it.post_id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #f5f5f5' }}>
-            <span style={{ width: 56, color: '#888' }}>#{it.post_id}</span>
-            <span className={`status-badge ${st.badge}`}>{st.label}</span>
-            {it.session_id && <span style={{ color: '#888' }}>session #{it.session_id}</span>}
-            {it.diff_count != null && <span style={{ color: '#666' }}>diffs {it.diff_count}</span>}
-            {it.auto_approved != null && <span style={{ color: '#2e7d32' }}>承認 {it.auto_approved}</span>}
-            {it.held > 0 && <span style={{ color: '#f57f17' }}>伺い {it.held}</span>}
-            {it.applied && <span style={{ color: '#1565c0' }}>WP適用 {it.applied_count}件</span>}
-            {it.error && <span style={{ color: '#c62828', flex: 1 }}>{it.error}</span>}
+            <span style={{ width: 56, color: '#888', flexShrink: 0 }}>#{it.post_id}</span>
+            <span className={`status-badge ${st.badge}`} style={{ flexShrink: 0 }}>{st.label}</span>
+            {holdLabel && <span style={{ color: it.hold_reason === 'policy_judgment' ? '#6a1b9a' : '#f57f17', flexShrink: 0 }}>{holdLabel}</span>}
+            {isAuto && it.title && (
+              <span style={{ color: '#555', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.title}>{it.title}</span>
+            )}
+            {it.session_id && <span style={{ color: '#888', flexShrink: 0 }}>session #{it.session_id}</span>}
+            {it.diff_count != null && <span style={{ color: '#666', flexShrink: 0 }}>diffs {it.diff_count}</span>}
+            {it.auto_approved != null && <span style={{ color: '#2e7d32', flexShrink: 0 }}>承認 {it.auto_approved}</span>}
+            {it.held > 0 && <span style={{ color: '#f57f17', flexShrink: 0 }}>伺い {it.held}</span>}
+            {it.applied && <span style={{ color: '#1565c0', flexShrink: 0 }}>WP反映 {it.applied_count}件</span>}
+            {it.error && <span style={{ color: '#c62828', flex: 1, minWidth: 0 }}>{it.error}</span>}
           </div>
         );
       })}
@@ -674,6 +699,7 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [autoApply, setAutoApply] = useState(true);
   const [batchJob, setBatchJob] = useState(null);
+  const [autoCount, setAutoCount] = useState(10);
 
   const refreshFanouts = async (selectId) => {
     const r = await api.getQueryFanouts();
@@ -751,7 +777,8 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
           const applied = j.items.filter((it) => it.applied).length;
           const held = j.items.filter((it) => it.status === 'held').length;
           const failed = j.items.filter((it) => it.status === 'failed').length;
-          showToast(`一括リライト完了: WP適用 ${applied} / 伺い ${held} / 失敗 ${failed} (全${j.total}件)`);
+          const label = j.mode === 'auto' ? '全自動モード' : '一括リライト';
+          showToast(`${label}完了: WP反映 ${applied} / 伺い ${held} / 失敗 ${failed} (全${j.total}件)`);
           loadCandidates(); // リライト済みになった記事が候補から消える
           onSessionCreated?.();
         }
@@ -790,6 +817,29 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
     const ids = [...selectedIds];
     if (ids.length === 0) return showToast('候補をチェックで選択してください', 'error');
     startBatch(ids, { genre, autoApply });
+  };
+
+  // 件数指定の全自動モード: 候補を自動ピックし、致命的判断要を除外して残りを WP 反映まで。
+  const handleStartAuto = async () => {
+    if (!genre || genre === 'all') return showToast('カテゴリを選択してください', 'error');
+    const n = Math.max(1, Math.min(50, Number(autoCount) || 0));
+    const ok = confirm(
+      `【全自動モード】${genre} の候補を上位 ${n} 件 自動ピックし、生成 → 自動承認 → WP 反映 まで一括実行します。\n\n` +
+      `致命的判断が必要な記事は自動適用せず「伺い」に残します:\n` +
+      `  ・policy 判断要 (タイトル変更/大規模再構成/compliance違反/事実リスク)\n` +
+      `  ・自動承認外の diff (risk有 / confidence≠high / 違反有) を含む記事\n\n` +
+      `クリーンな記事のみ WP に自動反映されます。\n` +
+      `推定: 約 $0.6 × ${n} = $${(0.6 * n).toFixed(1)} / 約 ${n * 3} 分。続行?`
+    );
+    if (!ok) return;
+    try {
+      const j = await api.startAutoBatch({ count: n, genre, enableCompliance: true });
+      setBatchJob(j);
+      setSelectedIds(new Set());
+      showToast(`全自動モード開始 (${j.total}件${j.capped ? ' / 上限50に丸め' : ''})`);
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
   };
 
   // 失敗/中断スキップ分を元バッチと同じ設定で再実行
@@ -866,6 +916,36 @@ function GenerationPanel({ showToast, onSessionCreated, genre, setGenre }) {
         <button className="btn-apply btn-small" onClick={handleStart} disabled={running}>
           {running ? '生成中...' : '生成'}
         </button>
+      </div>
+
+      {/* 件数指定の全自動モード: 候補自動ピック → 生成 → 致命的判断要を除外して WP 反映 */}
+      <div style={{ margin: '0 12px 4px', padding: '10px 12px', background: '#e8f5e9', border: '1px solid #66bb6a', borderRadius: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <strong style={{ color: '#2e7d32', fontSize: 13 }}>⚡ 全自動モード</strong>
+          <span style={{ fontSize: 12, color: '#555' }}>{genre} の候補を</span>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={autoCount}
+            onChange={(e) => setAutoCount(e.target.value)}
+            disabled={running || !genre || genre === 'all'}
+            style={{ width: 64 }}
+          />
+          <span style={{ fontSize: 12, color: '#555' }}>件 自動ピック → 生成 → 致命的判断要を除外して WP 反映</span>
+          <button
+            className="btn-apply btn-small"
+            style={{ marginLeft: 'auto', background: '#2e7d32' }}
+            onClick={handleStartAuto}
+            disabled={running || !genre || genre === 'all'}
+          >
+            {running ? '実行中...' : `${Math.max(1, Math.min(50, Number(autoCount) || 0))}件 自動リライト&反映`}
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: '#777', marginTop: 6, lineHeight: 1.5 }}>
+          除外 (Daiki に伺い): policy 判断要 (タイトル変更/大規模再構成/compliance違反/事実リスク) ・ 自動承認外 diff (risk有/conf≠high/違反有) を含む記事。
+          クリーンな記事のみ自動反映 (上限 50 件 / 項目間 15 秒)。
+        </div>
       </div>
 
       {/* 自動ピック候補 (順位モニタリング: 平均順位11-20 = 伸びしろ)。リライト済み・進行中の記事は除外。 */}

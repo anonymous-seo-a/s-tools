@@ -174,6 +174,9 @@ export const api = {
   // 一括リライト (生成 → 自動承認 → 全クリーンなら WP 適用)
   startBatchRewrite: (body) =>
     request('/api/rewrite/judgment/batch', { method: 'POST', body: JSON.stringify(body) }),
+  // 件数指定の全自動モード (候補自動ピック → 生成 → 致命的判断要を除外して WP 反映)
+  startAutoBatch: (body) =>
+    request('/api/rewrite/judgment/auto-batch', { method: 'POST', body: JSON.stringify(body) }),
   getBatchRewrite: () => request('/api/rewrite/judgment/batch'),
   getQueryFanouts: () =>
     request('/api/rewrite/judgment/query-fanouts'),
