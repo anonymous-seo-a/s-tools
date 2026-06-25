@@ -70,6 +70,11 @@ function calcIgScore({ post_id, query_fanout_id }) {
   }
 
   const compUnion = { 1: new Set(), 2: new Set(), 3: new Set() };
+  // Layer 0 (出典付与の土台): 各 fact の出自 competitor_url を保持する。
+  // gap fact が後段 (bundle→diff生成→出典付与) に流れる際、その fact が
+  // どの競合ページ由来かを失わないようにする (RC1: source を運ぶ)。
+  // 同一 fact を複数競合が持つ場合は最初の競合を出自とする (rank 昇順で走査済)。
+  const sourceMap = { 1: new Map(), 2: new Map(), 3: new Map() };
   let parsedCount = 0;
   for (const c of corpus) {
     let snap;
@@ -86,7 +91,11 @@ function calcIgScore({ post_id, query_fanout_id }) {
     parsedCount++;
     for (const layer of [1, 2, 3]) {
       const arr = Array.isArray(snap[`layer${layer}`]) ? snap[`layer${layer}`] : [];
-      for (const f of arr) compUnion[layer].add(normalize(f));
+      for (const f of arr) {
+        const key = normalize(f);
+        compUnion[layer].add(key);
+        if (key && !sourceMap[layer].has(key)) sourceMap[layer].set(key, c.competitor_url);
+      }
     }
   }
   if (parsedCount === 0) {
@@ -97,11 +106,13 @@ function calcIgScore({ post_id, query_fanout_id }) {
   for (const layer of [1, 2, 3]) {
     const selfSet = buildLayerSets(selfByLayer[layer]);
     const gap = diffSet(compUnion[layer], selfSet);
+    // gap_samples は {text, source_url} で保存 (Layer 0)。出典は「その fact の出自」に固定するため、
+    // テキストだけでなく出自 URL を必ず添える。後段 bundle は旧形式(文字列)も読めるようにする。
     result[layer] = {
       self_count: selfSet.size,
       competitor_union_count: compUnion[layer].size,
       gap_count: gap.length,
-      gap_samples: pickSamples(gap),
+      gap_samples: pickSamples(gap).map((t) => ({ text: t, source_url: sourceMap[layer].get(t) || null })),
     };
   }
 

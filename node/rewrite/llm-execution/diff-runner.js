@@ -24,8 +24,8 @@ const db = require('../db');
 const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
 const { buildRunStructuredView, makeRunResolver } = require('../apply/gutenberg-apply');
 const { genreConfig } = require('./genre-config');
-const { classifyDomain } = require('../competitor-corpus/collect');
 const { buildLearningNotes } = require('./learning');
+const { gateDiffCitations } = require('./citation-gate');
 const {
   SYSTEM_PROMPT,
   buildDiffUserPrompt,
@@ -162,13 +162,32 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
   const articleView = buildRunStructuredView(wp.content_raw);
   const resolveRun = makeRunResolver(articleView);
 
-  // 出典源プール: 競合コーパス全件 (種別タグ付き)。出典に言及する場合は必ずこの URL へリンクさせる
-  // (プレーンテキスト出典を禁止する)。gov/official を優先引用先として提示。
-  const citationSources = (bundle.query_fanout_id == null ? [] : conn.prepare(
-    `SELECT competitor_url FROM master_competitor_corpus WHERE query_fanout_id=?`
-  ).all(bundle.query_fanout_id))
-    .map((r) => ({ url: r.competitor_url, type: classifyDomain(r.competitor_url) }))
-    .sort((a, b) => ({ gov: 0, official: 1, media: 2 }[a.type] - { gov: 0, official: 1, media: 2 }[b.type]));
+  // 出典は LLM に書かせない (再構造)。代わりに出典付与ゲート (citation-gate) が
+  // bundle.required_additions の source_url から決定論的にレンダリングする。
+  // G5 出自整合の判定用に「正規化fact → 出自URL集合」インデックスを競合コーパスから構築する。
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const factSourceIndex = new Map();
+  const corpusRows = bundle.query_fanout_id == null ? [] : conn.prepare(
+    `SELECT competitor_url, fact_set_snapshot FROM master_competitor_corpus WHERE query_fanout_id=?`
+  ).all(bundle.query_fanout_id);
+  for (const r of corpusRows) {
+    let snap;
+    try { snap = JSON.parse(r.fact_set_snapshot); } catch { continue; }
+    if (!snap || snap._pending) continue;
+    for (const layer of [1, 2, 3]) {
+      const arr = Array.isArray(snap[`layer${layer}`]) ? snap[`layer${layer}`] : [];
+      for (const f of arr) {
+        const k = norm(f);
+        if (!k) continue;
+        if (!factSourceIndex.has(k)) factSourceIndex.set(k, new Set());
+        factSourceIndex.get(k).add(r.competitor_url);
+      }
+    }
+  }
+  const factInSource = (factText, url) => {
+    const s = factSourceIndex.get(norm(factText));
+    return s ? s.has(url) : false;
+  };
 
   const userPrompt = buildDiffUserPrompt({
     post_id: session.post_id,
@@ -179,7 +198,6 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
     bundle,
     master_rules: masterRules,
     genre: gcfg,
-    citation_sources: citationSources,
     learning_notes: buildLearningNotes(gcfg.key),  // C 学習ループ: 過去判定の反映
   });
 
@@ -204,6 +222,16 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
     throw new Error(`no valid diffs (parsed=${diffs.length}, errors=${errors.length}): ${errors.slice(0, 3).join(' | ')}`);
   }
 
+  // 出典付与ゲート: LLM の inline 出典を剥がし、required_additions の出自URLから
+  // 決定論+意味検証で出典を再付与する。一般論は drop、一次情報主張でゲート不通過は held。
+  const citation = await gateDiffCitations({
+    diffs: accepted,
+    requiredAdditions: bundle.required_additions,
+    subjectText: `${bundle.target_query || ''} ${wp.title || ''}`,
+    factInSource,
+  });
+  const gated = citation.results;
+
   const insertDiff = conn.prepare(
     `INSERT INTO master_rewrite_diff
        (session_id, diff_order, target_section, change_type, change_category,
@@ -216,6 +244,7 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
   // server side で補填する (LLM の hallucination 排除 + apply の照合キーになる)。
   // insert 系 / meta 系 / run 解決不可は content_before = null。
   let server_resolved_count = 0;
+  let citation_held = 0;
   const tx = conn.transaction((rows) => {
     rows.forEach((d, idx) => {
       let contentBefore = null;
@@ -223,6 +252,16 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
         const runMarkup = resolveRun(d.target_section, d.run_index);
         if (runMarkup) { contentBefore = runMarkup; server_resolved_count++; }
       }
+      const g = gated[idx] || {};
+      // 出典ゲート結果を rationale に記録し、held は confidence='low' で自動承認から外す。
+      const rationale = { ...(d.rationale || {}) };
+      rationale.citation = {
+        cited: g.cited || [],
+        dropped: g.dropped || [],
+        hold_reasons: g.holdReasons || [],
+      };
+      const confidence = g.hold ? 'low' : d.llm_confidence;
+      if (g.hold) citation_held++;
       insertDiff.run(
         session_id,
         idx + 1,
@@ -230,10 +269,10 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
         d.change_type,
         d.change_category,
         contentBefore,
-        d.content_after ?? null,
-        JSON.stringify(d.rationale || {}),
+        (g.content_after !== undefined ? g.content_after : d.content_after) ?? null,
+        JSON.stringify(rationale),
         d.estimated_impact ? JSON.stringify(d.estimated_impact) : null,
-        d.llm_confidence,
+        confidence,
         d.risk_flag ?? null
       );
     });
@@ -246,6 +285,8 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
   notesObj.diff_errors = errors;
   notesObj.diff_parsed_total = diffs.length;
   notesObj.content_before_server_resolved = server_resolved_count;
+  notesObj.citation_cited = gated.reduce((n, g) => n + (g.cited ? g.cited.length : 0), 0);
+  notesObj.citation_held = citation_held;
 
   conn.prepare(
     `UPDATE master_rewrite_session
@@ -267,6 +308,9 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
     diffs_inserted: accepted.length,
     diffs_rejected: errors.length,
     content_before_server_resolved: server_resolved_count,
+    citation_cited: notesObj.citation_cited,
+    citation_held,
+    citation_usage: citation.usage,
     errors,
     usage: llmRes.usage,
     status: 'awaiting_diff_judgment',

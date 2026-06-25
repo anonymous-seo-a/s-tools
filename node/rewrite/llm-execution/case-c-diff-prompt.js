@@ -232,7 +232,6 @@ function buildDiffUserPrompt({
   bundle,
   master_rules,
   genre,
-  citation_sources,
   learning_notes,
 }) {
   const protectedRegions = PROTECTED_CLASS_PATTERNS.map((p) => `  - ${p}`).join('\n');
@@ -257,24 +256,14 @@ rewrite_run は「見出し(target_section) + run_index」で run を特定す�
 
 ${renderArticleView(article_view)}`);
 
-  if (Array.isArray(citation_sources) && citation_sources.length > 0) {
-    const list = citation_sources.map((s) => `- [${s.type}] ${s.url}`).join('\n');
-    sections.push(`# 出典源プール (引用先 URL。gov/official 優先)
-追加・修正した事実を出典付きで補強する場合、下記形式で**必ず実リンク**を付ける:
-<!-- wp:quote -->
-<blockquote class="wp-block-quote"><!-- wp:paragraph -->
-<p><a href="(下記プールのURL)" target="_blank" rel="noopener">出典: サイト名</a></p>
-<!-- /wp:paragraph --></blockquote>
-<!-- /wp:quote -->
-
-【出典の絶対ルール】
-- 出典・情報源に言及するなら、必ず上記形式の <a href> 実リンクにすること。
-- **リンクを伴わない出典言及は禁止**。「みんかぶ等を参考に」「〜のデータによると」「〜時点」
-  「出典時点：」等の、URL リンクの無いプレーンテキストの出典表記を出力してはならない。
-- URL は必ず下記プールから選ぶ (創作禁止)。該当 URL が無い情報には出典に一切言及せず、
-  通常の本文として書くこと (gov/official を優先的に引用)。
-${list}`);
-  }
+  sections.push(`# 出典の扱い (重要: 出典は絶対に自分で書かない)
+- **出典・引用・URL・<blockquote>・「出典:」「〜によると」「〜のデータでは」等を content_after に一切書いてはならない。**
+  出典の付与はサーバが「使用した fact の出自」から自動で行う。あなたが URL や社名を選ぶことはない。
+- 代わりに、追加・補強した本文がどの fact に依拠するかを
+  rationale.bundle_refs.required_additions に **その fact の index (0始まり)** で必ず申告する。
+  サーバはその index の fact の出自URLだけを出典化する (誤った出典の混入を構造的に防ぐ)。
+- 一般論 (「一般的に」「場合がある」等で、具体数値も制度名も固有仕様も含まない記述) には
+  出典を要しない。fact を使わず通常の本文として書いてよい (index 申告も不要)。`);
 
   sections.push(`# bundle snapshot (rationale.bundle_refs の index 参照元)
 ${JSON.stringify(bundle, null, 2)}`);

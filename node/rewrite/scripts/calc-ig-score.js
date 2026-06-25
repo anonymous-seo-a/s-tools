@@ -42,7 +42,7 @@ for (const layer of [1, 2, 3]) {
   console.log(`Layer ${layer}: self=${L.self_count} comp_union=${L.competitor_union_count} gap=${L.gap_count}`);
   if (L.gap_samples.length) {
     console.log(`  samples:`);
-    for (const s of L.gap_samples) console.log(`    - ${s}`);
+    for (const s of L.gap_samples) console.log(`    - ${s.text}  [出自: ${s.source_url || 'なし'}]`);
   }
 }
 console.log(`\nelapsed: ${elapsed}ms`);

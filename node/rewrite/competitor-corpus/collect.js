@@ -46,11 +46,30 @@ function isExcludedDomain(url, extra = []) {
   return matchesSuffix(host, [...EXCLUDE_DOMAIN_SUFFIXES, ...extra]);
 }
 
-// ドメイン種別: gov(政府=一次情報/出典) / official(企業公式) / media(比較・メディア)。
-// 「除外」ではなく「役割」(media=網羅基準, official/gov=出典源) の判定に使う。
+// 個人ブログ / 無料ブログ / フォーラム = 一次情報源として不適格 (出典権威ゲートで棄却対象)。
+// 企業公式ドメイン配下でも blog/diary 等のパスはユーザ生成 (例: plaza.rakuten.co.jp/<user>/diary/)
+// であり official に昇格させてはならない。ホスト or パスで判定する。
+const PERSONAL_BLOG_HOSTS = [
+  'ameblo.jp', 'note.com', 'hatenablog.com', 'hateblo.jp', 'fc2.com', 'livedoor.jp',
+  'blog.jp', 'seesaa.net', 'goo.ne.jp', 'exblog.jp', 'plaza.rakuten.co.jp', 'blog.rakuten.co.jp',
+  'note.mu', 'medium.com', 'wordpress.com', 'blogspot.com',
+];
+function isPersonalBlog(url) {
+  let host, pathname;
+  try { const u = new URL(url); host = u.hostname.toLowerCase(); pathname = u.pathname.toLowerCase(); }
+  catch { return false; }
+  if (host.startsWith('blog.') || host.startsWith('ameblo.')) return true;
+  if (matchesSuffix(host, PERSONAL_BLOG_HOSTS)) return true;
+  if (/\/(diary|blog|ameblo|user|members?)\//.test(pathname)) return true;
+  return false;
+}
+
+// ドメイン種別: gov(政府=一次情報/出典) / official(企業公式) / media(比較・メディア) / blog(個人ブログ=不適格)。
+// 「除外」ではなく「役割」(media=網羅基準, official/gov=出典源, blog=出典不可) の判定に使う。
 function classifyDomain(url) {
   let host;
   try { host = new URL(url).hostname.toLowerCase(); } catch { return 'media'; }
+  if (isPersonalBlog(url)) return 'blog'; // 個人ブログは official 配下でも blog 扱い (一次情報源にしない)
   if (matchesSuffix(host, ['go.jp', 'go.kr']) || host.endsWith('.gov')) return 'gov';
   // 企業公式 = EXCLUDE_DOMAIN_SUFFIXES のうち go.jp/自サイト以外
   const official = EXCLUDE_DOMAIN_SUFFIXES.filter((s) => !s.endsWith('go.jp') && s !== 'soico.jp');
@@ -133,4 +152,4 @@ async function collectCompetitorCorpus(query_fanout_id, { topN = 5, excludeDomai
   };
 }
 
-module.exports = { collectCompetitorCorpus, isExcludedDomain, classifyDomain, EXCLUDE_DOMAIN_SUFFIXES };
+module.exports = { collectCompetitorCorpus, isExcludedDomain, classifyDomain, isPersonalBlog, EXCLUDE_DOMAIN_SUFFIXES };

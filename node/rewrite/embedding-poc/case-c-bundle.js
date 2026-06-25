@@ -64,10 +64,14 @@ function loadFactsetGapSamples(conn, { post_id, target_query }) {
   for (const layer of [1, 2, 3]) {
     const arr = notes?.gap_fact_samples?.[`layer${layer}`];
     if (Array.isArray(arr)) {
-      for (const text of arr) {
+      for (const item of arr) {
+        // Layer 0: 新形式 {text, source_url} と旧形式 (文字列) の両対応。
+        // source_url は「この fact の出自」= 後段の出典付与で唯一の正となる URL。
+        const text = typeof item === 'string' ? item : item?.text;
+        const source_url = typeof item === 'string' ? null : (item?.source_url || null);
         if (typeof text === 'string' && text.trim()) {
           if (isVolatileFact(text)) { volatile_excluded++; continue; } // durability: 揮発性事実は注入しない
-          rows.push({ layer, text: text.trim() });
+          rows.push({ layer, text: text.trim(), source_url });
         }
       }
     }
