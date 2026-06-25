@@ -314,27 +314,10 @@ function wrapBlock(type, innerHtml, attrs) {
   return `<!-- wp:${type}${attrStr} -->\n${innerHtml}\n<!-- /wp:${type} -->`;
 }
 
-// 空ブロック (空行) — リライト本文の段落間に「もう一段の改行」を入れる (Daiki 指定)。
-const PARAGRAPH_SPACER = '<!-- wp:paragraph -->\n<p>&nbsp;</p>\n<!-- /wp:paragraph -->';
-
-/**
- * 連続する段落ブロックの間に空ブロックを挿入する (リライト本文のみ適用)。
- * リスト/テーブル/BOX/見出し等は元々余白があるため、段落↔段落のみ対象。
- */
-function insertParagraphSpacers(markup) {
-  if (typeof markup !== 'string' || markup.trim() === '') return markup;
-  const blocks = parseTopLevelBlocks(markup);
-  if (blocks.length < 2) return markup;
-  const parts = [];
-  for (let i = 0; i < blocks.length; i++) {
-    parts.push(blocks[i].markup);
-    const next = blocks[i + 1];
-    if (next && blocks[i].type === 'paragraph' && next.type === 'paragraph') {
-      parts.push(PARAGRAPH_SPACER);
-    }
-  }
-  return parts.join('\n\n');
-}
+// 段落間の空ブロック挿入は廃止 (2026-06-25)。
+//   実記事(securities/4185)の実リズム計測で空SPACERブロックは 0、段落間は通常のブロック余白のみ。
+//   Phase1 の `<p>&nbsp;</p>` 挿入は「改行入れすぎ」で house style から外れていた (Daiki 実環境確認)。
+//   段落リズムは paragraph-splitter (1段落=最大2文) のみで担保する。
 
 // ─────────────────────────────────────────────────────────────
 // plan / apply
@@ -389,7 +372,7 @@ function planGutenbergApply(raw, diffs) {
     const hIdx = findHeadingIndex(blocks, target);
     if (hIdx < 0) { skipped.push({ diff_id: d.id, reason: 'アンカー見出しが raw に見つからない (記事が変動した可能性)' }); continue; }
 
-    const markup = insertParagraphSpacers(htmlToBlocks(after));
+    const markup = htmlToBlocks(after);
     if (!markup) { skipped.push({ diff_id: d.id, reason: 'content_after をブロック化できない' }); continue; }
 
     const anchor = blocks[hIdx];

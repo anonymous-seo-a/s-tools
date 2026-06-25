@@ -5,11 +5,13 @@
  * リライト本文の <p> を「折り返して2行以下に収まる分量」のブロックに分割する。
  * soico no1 のハウススタイル (各ブロック間に約40pxの空行リズム) を、LLM の遵守に依存せず保証する。
  *
- * 規則 (実測根拠 2026-06-23): 実記事4722の段落ブロック158個中148個(94%)が「1文1ブロック」。
- *   → soico no1 のハウススタイルは **1文 = 1ブロック**。短文でも結合しない (結合すると空行が減る)。
- *   - 句点 (。！？) ごとに必ず別ブロック
- *   - 1文が2行を超えても文の途中では切らない (その文だけで1ブロック)
- *   - inline タグ (<strong>/<a>/<em>等) は壊さず保持
+ * 規則 (実測根拠 2026-06-25, 実記事 securities/4185): 1段落 = **1〜2文**。
+ *   段落75個中 1文=36 / 2文=37 / 3文以上=0。文字数 median 65 / p90 84 / max 141。
+ *   → ハウススタイルは **最大2文/段落**。1〜2文の段落はそのまま、3文以上の「壁」だけを2文単位に分割する。
+ *   （旧Phase1の「1文=1ブロック」は改行過剰で house style から外れていた。2026-06-25 修正)
+ *   - 句点 (。！？) 2つごとに区切る (= 最大2文/ブロック)
+ *   - 1〜2文の段落は分割しない (chunks.length<=1 で原形維持)
+ *   - 文の途中では切らない / inline タグ (<strong>/<a>/<em>等) は壊さず保持
  *
  * content_after は生HTML / Gutenberg ブロックmarkup どちらでも来るため両対応:
  *   - splitParagraphsInHtml: 生HTML の裸 <p> を分割 (htmlToBlocks の raw 経路)
@@ -18,14 +20,18 @@
 
 const cheerio = require('cheerio');
 
-// 単一 <p> の cheerio ノードを「1文1チャンク」に分割 (inner HTML 文字列の配列)
+const MAX_SENTENCES_PER_BLOCK = 2; // 1段落=最大2文 (実記事4185の house style)
+
+// 単一 <p> の cheerio ノードを「最大2文/チャンク」に分割 (inner HTML 文字列の配列)
 function splitPNode($, pNode) {
   const chunks = [];
-  let sentHtml = ''; // 構築中の1文
+  let buf = '';       // 構築中のチャンク
+  let sentCount = 0;  // チャンク内の文数
 
-  const flushSentence = () => {
-    if (sentHtml.trim() !== '') chunks.push(sentHtml);
-    sentHtml = '';
+  const flush = () => {
+    if (buf.trim() !== '') chunks.push(buf);
+    buf = '';
+    sentCount = 0;
   };
 
   for (const node of pNode.children || []) {
@@ -33,14 +39,17 @@ function splitPNode($, pNode) {
       const parts = (node.data || '').split(/(?<=[。！？])/);
       for (const part of parts) {
         if (part === '') continue;
-        sentHtml += part;
-        if (/[。！？]\s*$/.test(part)) flushSentence(); // 文末ごとに必ず区切る (結合しない)
+        buf += part;
+        if (/[。！？]\s*$/.test(part)) {
+          sentCount++;
+          if (sentCount >= MAX_SENTENCES_PER_BLOCK) flush(); // 2文ごとに区切る
+        }
       }
     } else if (node.type === 'tag') {
-      sentHtml += $.html(node); // inline 要素は現在の文に丸ごと付ける
+      buf += $.html(node); // inline 要素は現在のチャンクに丸ごと付ける
     }
   }
-  flushSentence();
+  flush();
   return chunks.filter((c) => c.trim() !== '');
 }
 
