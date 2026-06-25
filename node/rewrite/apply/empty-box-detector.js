@@ -51,6 +51,29 @@ function followingContext(raw, endOffset, maxChars = 600) {
   return $.text().replace(/\s+/g, ' ').trim().slice(0, maxChars);
 }
 
+// BOX 直前の本文テキスト (直前の heading or 別 box から BOX まで) を抜く。
+// 「○○の特徴」箱がセクション末尾に置かれる場合 (直後が見出し=followingが空) に、
+// 箱が要約すべき本文は直前にあるため、こちらを文脈に使う。
+function precedingContext(raw, startOffset, maxChars = 600) {
+  const before = raw.slice(Math.max(0, startOffset - 3000), startOffset);
+  const hPos = before.lastIndexOf('<!-- wp:heading');
+  const closeTag = '<!-- /wp:html -->';
+  const hClosePos = before.lastIndexOf(closeTag);
+  const cut = Math.max(hPos, hClosePos >= 0 ? hClosePos + closeTag.length : -1);
+  const seg = cut >= 0 ? before.slice(cut) : before;
+  const $ = cheerio.load(seg);
+  return $.text().replace(/\s+/g, ' ').trim().slice(-maxChars); // 箱に近い末尾側を優先
+}
+
+// BOX が属するセクションの本文 = 後方 + 前方 (箱が先頭/末尾どちらに置かれても拾う)
+function sectionContext(raw, startOffset, endOffset) {
+  const following = followingContext(raw, endOffset);
+  const preceding = precedingContext(raw, startOffset);
+  // 後方を主、無ければ前方。両方あれば結合 (中間配置の箱も網羅)。
+  const combined = [following, preceding].filter((s) => s && s.length > 0).join(' ');
+  return combined.slice(0, 800);
+}
+
 function detectEmptyTitleBoxes(raw) {
   if (typeof raw !== 'string' || !raw) return [];
   const out = [];
@@ -83,7 +106,7 @@ function detectEmptyTitleBoxes(raw) {
       boxMarkup: blk.full,
       divStyle: div.attr('style') || '',
       labelHtml: $.html(labelEl) || `<p>${clean}</p>`,
-      contextText: followingContext(raw, blk.end),
+      contextText: sectionContext(raw, blk.start, blk.end),
     });
   }
   return out;
