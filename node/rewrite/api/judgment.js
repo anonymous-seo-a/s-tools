@@ -122,7 +122,7 @@ async function runGenerationPipeline(job, conn) {
   try {
     job.step = 'box_fill';
     const boxRes = await runBoxFill({ session_id });
-    job.box_fill = { detected: boxRes.detected, filled: boxRes.filled };
+    job.box_fill = { detected: boxRes.detected, filled: boxRes.filled, held: boxRes.held };
   } catch (e) {
     console.error(`[runGenerationPipeline] box_fill 失敗 (非致命): ${e.message}`);
     job.box_fill = { error: e.message };

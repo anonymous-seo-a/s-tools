@@ -14,6 +14,7 @@ const cheerio = require('cheerio');
 const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
 const db = require('../db');
 const { detectEmptyTitleBoxes } = require('../apply/empty-box-detector');
+const { checkGrounding } = require('./number-grounding');
 
 const SYSTEM_PROMPT = `あなたは YMYL 記事の「空のテンプレБOX」を埋める編集者。
 各BOXは見出しラベル(例:「楽天証券の特徴」「料金体系」)だけで中身が空。ラベルと「直後の本文」を元に、
@@ -25,6 +26,13 @@ const SYSTEM_PROMPT = `あなたは YMYL 記事の「空のテンプレБOX」�
 - format='table': <table> を生成 (2項目以上の対比=比較/違いを行で表現)。
 - ラベルの語義・スコープに厳密: 「メリット」には利点のみ、「デメリット」には欠点のみ。
   「ボックスレートの料金体系」なら料金段階のみ (他制度の手数料特典は入れない)。ラベルの主題から外れる項目を足さない。
+- **極性の厳守 (最重要)**: ラベルが「〜のメリット」なら利点だけを書く。直後本文に欠点・注意点・
+  リスク・コスト・「ただし〜」「〜できない」「〜には不利」等の不利益情報があっても、メリットBOXには
+  絶対に入れない。「〜のデメリット」ならその逆で、利点を入れない。
+  - 悪い例 (メリットBOXに欠点が混入・禁止): 「為替ヘッジには年1〜2%のコストがかかる」
+  - 良い例 (メリットBOXは利点のみ): 「為替変動の影響を抑え、金価格の動きに集中して投資できる」
+  - 不利益情報を反転して利点に言い換えることもしない (例:「コストがかかる」→「コストは低い」等の捏造)。
+    利点が直後本文に無ければ無理に作らず、確実な利点だけを列挙する。
 - **具体数値(金額/利率/件数/段階)は『fact一覧』または『直後本文』に明記された値のみ使う**。
   そこに無い数値は絶対に創作しない (YMYL: 誤った金額は重大事故)。
 - 揮発情報(現在価格・時価・当日の市況・「2026年X月時点で◯件」等)は入れない。普遍的な特徴/制度/分類のみ。
@@ -85,19 +93,85 @@ function rebuildBox(box, fillHtml) {
 /**
  * @returns {Array<{...box, fillHtml, filledMarkup}>}  (中身が作れた BOX のみ)
  */
+// 生成HTMLの <li> テキスト配列 (li が無ければプレーンテキスト1要素)
+function liTexts(html) {
+  const $ = cheerio.load(html, { decodeEntities: false });
+  const items = $('li').map((_, el) => $(el).text().trim()).get().filter(Boolean);
+  return items.length ? items : [$.root().text().replace(/\s+/g, ' ').trim()].filter(Boolean);
+}
+
+// ラベルの極性: 'merit' | 'demerit' | null (メリット・デメリット混在BOXは null=対象外)
+function labelPolarity(label) {
+  const l = (label || '').replace(/\s+/g, '');
+  if (l.endsWith('メリット・デメリット')) return null;
+  if (l.endsWith('デメリット')) return 'demerit';
+  if (l.endsWith('メリット')) return 'merit';
+  return null;
+}
+
+const POLARITY_SYSTEM = `あなたはYMYL記事の校正者。各BOXは「メリット」か「デメリット」のラベルを持つ。
+各項目がラベルの方向と一致するか判定する。
+- meritBOX: 利点・長所のみが正。欠点・注意点・リスク・コスト発生・「〜できない」「〜に不利」「ただし〜」等の不利益情報は逆方向。
+- demeritBOX: 欠点・注意点のみが正。利点・長所は逆方向。
+逆方向の項目だけを badItems に挙げる。判断に迷う中立項目(対象者の説明等)は badItemsに入れない。
+出力はJSONのみ: {"leaks":[{"box":<番号>,"badItems":[<項目index>,...]}]}`;
+
+// メリット/デメリットBOX の極性混入を意味的に検証 (該当BOXのみ・1回呼び出し)。
+// @returns {Map<filledIndex, boolean>} polarityLeak
+async function verifyPolarity(filled) {
+  const targets = [];
+  filled.forEach((b, i) => {
+    const pol = labelPolarity(b.label);
+    if (pol) targets.push({ i, pol, label: b.label, items: liTexts(b.fillHtml) });
+  });
+  const leakMap = new Map();
+  if (targets.length === 0) return { leakMap, usage: null };
+  const user = `# 検証対象BOX\n${targets.map((t, n) =>
+    `box ${n} (${t.pol === 'merit' ? 'メリット' : 'デメリット'}BOX「${t.label}」):\n` +
+    t.items.map((it, k) => `  [${k}] ${it}`).join('\n')
+  ).join('\n\n')}\n\n各boxの逆方向項目のindexを上記スキーマJSONで返せ。`;
+  let usage = null;
+  try {
+    const res = await sonnet({ system: POLARITY_SYSTEM, user, maxTokens: 1024 });
+    usage = res.usage;
+    let t = (res.text || '').trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+    const s = t.indexOf('{'); const e = t.lastIndexOf('}');
+    if (s >= 0 && e > s) t = t.slice(s, e + 1);
+    const leaks = JSON.parse(t).leaks || [];
+    for (const lk of leaks) {
+      const tgt = targets[lk.box];
+      if (tgt && Array.isArray(lk.badItems) && lk.badItems.length > 0) leakMap.set(tgt.i, true);
+    }
+  } catch (e) {
+    // 検証失敗時は安全側 = 全極性BOXを leak 扱い (held に倒す)
+    console.warn(`[verifyPolarity] 失敗 (安全側で held): ${e.message}`);
+    for (const t of targets) leakMap.set(t.i, true);
+  }
+  return { leakMap, usage };
+}
+
 async function fillEmptyBoxes({ title, boxes, facts }) {
   if (!boxes || boxes.length === 0) return { filled: [], usage: null };
   const res = await sonnet({ system: SYSTEM_PROMPT, user: buildUserPrompt({ title, boxes, facts }), maxTokens: 4096 });
   let fills;
   try { fills = parseFills(res.text); } catch (e) { throw new Error(`empty-box fill JSON parse 失敗: ${e.message}`); }
   const byIndex = new Map(fills.map((f) => [f.index, f.html]));
+  const factTexts = (facts || []).map((f) => f.content);
   const filled = [];
   boxes.forEach((box, i) => {
     const html = byIndex.get(i);
     const filledMarkup = html ? rebuildBox(box, html) : null;
-    if (filledMarkup) filled.push({ ...box, fillHtml: html, filledMarkup });
+    if (!filledMarkup) return;
+    // 施策1: 数値 grounding (context + fact を根拠に創作数値を検出)
+    const grounding = checkGrounding(cheerio.load(html, { decodeEntities: false }).text(), [box.contextText || '', ...factTexts]);
+    filled.push({ ...box, fillHtml: html, filledMarkup, grounding, polarityLeak: false });
   });
-  return { filled, usage: res.usage };
+  // 極性: メリット/デメリットBOX のみ意味的検証
+  const pv = await verifyPolarity(filled);
+  const leakMap = pv.leakMap || new Map();
+  filled.forEach((b, i) => { if (leakMap.get(i)) b.polarityLeak = true; });
+  const usage = res.usage;
+  return { filled, usage, polarityUsage: pv.usage };
 }
 
 // apply 用 ops (raw オフセット置換)。rewrite diff ops と一緒に applyGutenbergOps へ。
@@ -139,16 +213,32 @@ async function runBoxFill({ session_id }) {
     `INSERT INTO master_rewrite_diff
        (session_id, diff_order, target_section, change_type, change_category,
         content_before, content_after, rationale, llm_confidence, risk_flag)
-     VALUES (?, ?, ?, 'fill_empty_box', 'other', ?, ?, ?, 'high', NULL)`
+     VALUES (?, ?, ?, 'fill_empty_box', 'other', ?, ?, ?, ?, NULL)`
   );
+  let held = 0;
   const tx = conn.transaction((rows) => {
     rows.forEach((b, i) => {
-      const rationale = JSON.stringify({ primary_source: 'empty_box_fill', box_label: b.label, format: b.format });
-      ins.run(session_id, maxOrder + i + 1, `box:${b.label}`, b.boxMarkup, b.filledMarkup, rationale);
+      // 施策1+極性: 創作数値あり or 極性混入 → confidence='low' で自動承認から除外(held)。
+      //   clean は 'high' のまま自動承認対象を維持。compliance(誇大/優良誤認)は step6 で別途付与。
+      const ungrounded = b.grounding ? b.grounding.ungrounded : [];
+      const reasons = [];
+      if (ungrounded.length) reasons.push(`創作疑い数値:${ungrounded.join(',')}`);
+      if (b.polarityLeak) reasons.push('極性混入(メリ/デメ)');
+      const confidence = reasons.length ? 'low' : 'high';
+      if (reasons.length) held++;
+      const rationale = JSON.stringify({
+        primary_source: 'empty_box_fill',
+        box_label: b.label,
+        format: b.format,
+        grounding_ungrounded: ungrounded,
+        polarity_leak: !!b.polarityLeak,
+        auto_hold_reasons: reasons,
+      });
+      ins.run(session_id, maxOrder + i + 1, `box:${b.label}`, b.boxMarkup, b.filledMarkup, rationale, confidence);
     });
   });
   tx(filled);
-  return { detected: boxes.length, filled: filled.length, usage };
+  return { detected: boxes.length, filled: filled.length, held, usage };
 }
 
-module.exports = { fillEmptyBoxes, buildBoxFillOps, runBoxFill, SYSTEM_PROMPT };
+module.exports = { fillEmptyBoxes, buildBoxFillOps, runBoxFill, SYSTEM_PROMPT, verifyPolarity, labelPolarity };
