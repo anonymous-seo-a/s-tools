@@ -1,7 +1,7 @@
 # ハンドオフ: 出典付与ロジックの調査と再設計（楽天の内容に三井住友の出典が付く）
 
 最終更新: 2026-06-25 / 次セッション継続用
-状態: **調査・設計フェーズ。実装はしない（本番でリライト進行中のため）**
+状態: **実装・本番デプロイ完了（commit edc3028）**。当初は設計のみの予定だったが、稼働中リライト完了の連絡を受け実装→デプロイまで実施。詳細は §10。
 
 ---
 
@@ -250,3 +250,33 @@ diff 後処理で、出典URLのドメイン/会社名が **本文の主題エ�
 4. `classifyDomain` 是正（個人ブログ判定・official 昇格）。
 5. 適用層（`gutenberg-apply.js`）: evidence_fact_ids → blockquote レンダリング + held 分岐。
 - すべて単一経路に集約（複雑性の局所化）。
+
+---
+
+## 10. 実装・デプロイ完了 (2026-06-25, commit edc3028)
+
+§9 設計を実装し本番 (`/opt/s-tools` → pm2 rewrite-app) に反映済。
+
+### 変更ファイル
+- `fact-set/ig-score.js` — Layer0: gap fact に出自 source_url を伝搬 (`gap_fact_samples` を `{text,source_url}` 化)。
+- `embedding-poc/case-c-bundle.js` — `required_additions` が source_url を運ぶ (旧文字列形式も互換読み)。
+- `competitor-corpus/collect.js` — `classifyDomain` に `blog` 種別追加 + `isPersonalBlog` (plaza.rakuten等を official 誤分類しない)。
+- `llm-execution/citation-gate.js` (新) — G1〜G5 + inline出典除去 + 出典blockquoteのサーバレンダリング + Haiku entailment(fail-safe)。
+- `llm-execution/diff-runner.js` — フラットURLプール廃止 → ゲート後処理。G5用 factSourceIndex 構築。一次情報主張の不通過は held(conf=low)。
+- `llm-execution/case-c-diff-prompt.js` — 出典/URL記述を全面禁止、依拠factは `rationale.bundle_refs.required_additions` のindex申告に一本化。
+- `scripts/smoke-citation-gate.js` (新) — diff822再現の決定論テスト17件 (本番でも通過確認済)。
+
+### 設計との差分 (実装上の判断)
+- **G4/G5 の役割整理**: G5(出自整合)は Layer0 により「source_url = factを持つ競合」なので、`factSourceIndex` への決定論メンバシップ照合で実装 (再フェッチ不要)。フェッチ版(抽出品質監査)は別途サンプリングで実施する想定 (未実装)。
+- **G2 権威**: 「media降格」は出自固定(Layer0)と両立しないため、個人ブログ/フォーラムの棄却のみに留めた (media は G4 に委譲)。recall を保つ判断。
+- **G1 発火条件**: 「具体数値 or 固有名の制度/法令」のみ発火。一般語(ポイント還元率/手数料/金利 単独)では発火させない → diff822本文(一般論)は出典drop。
+- **held 表現**: 専用カラムを足さず confidence='low' + rationale.citation で表現 (empty-box と同型、既存 auto承認ゲートがそのまま除外)。
+
+### 検証
+- 決定論17件 smoke 通過 (ローカル+本番)。
+- diff822 シナリオ orchestration: smbc出典は除去・一般論なので無出典・held無し(本文残る)・LLM呼び出しゼロ。
+
+### 残課題 (次セッション候補)
+- G5 フェッチ版(抽出品質の定期監査・サンプリング)。
+- BRANDS 辞書の拡充 (新ジャンル追加時)。
+- 効果測定: 本番リライトで citation_held / citation_cited (session.notes) を観測し、held率・誤出典再発ゼロを確認。
