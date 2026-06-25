@@ -5,7 +5,9 @@ const { open } = require('../db');
 const { runComplianceCheck } = require('../llm-execution/compliance-runner');
 const { runAnalysis } = require('../llm-execution/analysis-runner');
 const { runDiffGeneration } = require('../llm-execution/diff-runner');
+const { runBoxFill } = require('../llm-execution/empty-box-filler');
 const { sessionCostUsd } = require('../llm-execution/cost');
+const { checkReadability } = require('../llm-execution/readability-checker');
 const { getModels, setModels, ALLOWED_MODELS } = require('../../shared/llm-adapters/anthropic-adapter');
 const { planGutenbergApply, applyGutenbergOps, htmlToBlocks } = require('../apply/gutenberg-apply');
 const { classifyDomain, collectCompetitorCorpus } = require('../competitor-corpus/collect');
@@ -114,6 +116,17 @@ async function runGenerationPipeline(job, conn) {
     diffs_rejected: diffRes.diffs_rejected,
     content_before_server_resolved: diffRes.content_before_server_resolved,
   };
+
+  // 5b. 空テンプレBOX 補完 (検出→fact で中身生成→fill_empty_box diff として判定フローへ)。
+  //     失敗してもリライト本体は止めない (補助工程)。
+  try {
+    job.step = 'box_fill';
+    const boxRes = await runBoxFill({ session_id });
+    job.box_fill = { detected: boxRes.detected, filled: boxRes.filled };
+  } catch (e) {
+    console.error(`[runGenerationPipeline] box_fill 失敗 (非致命): ${e.message}`);
+    job.box_fill = { error: e.message };
+  }
 
   // 6. (optional) runComplianceCheck
   if (enableCompliance) {
@@ -509,8 +522,9 @@ async function prepareCandidate(postId, genre) {
 // 自動承認 (一括リライト用)
 //   実績データ (過去の Daiki 判定) に基づく保守的基準:
 //     却下実績は rate_update の事実誤りと medium 確信度に集中
-//   → 自動承認 = compliance violations なし × risk_flag なし × llm_confidence 'high'
+//   → 自動承認 = compliance violations なし × risk_flag OK × llm_confidence OK × 可読性ガード通過
 //     それ以外は pending のまま残す (= 判断に迷う部分として Daiki に伺う)
+//     可読性ガード: ハウススタイル逸脱 (段落>250字 / 視覚要素なし本文>450字) を held に倒す
 // ─────────────────────────────────────────────────────────────
 function diffHasViolations(rationale) {
   try {
@@ -531,7 +545,7 @@ const AUTO_CONF_OK = new Set(['high', 'medium']);
 function autoJudgeSession(sessionId) {
   const conn = open();
   const diffs = conn.prepare(
-    `SELECT id, rationale, risk_flag, llm_confidence, daiki_judgment
+    `SELECT id, rationale, risk_flag, llm_confidence, daiki_judgment, content_after, daiki_edit_content
      FROM master_rewrite_diff WHERE session_id=? AND daiki_judgment='pending'`
   ).all(sessionId);
   const approve = conn.prepare(
@@ -543,7 +557,10 @@ function autoJudgeSession(sessionId) {
     const riskOk = AUTO_RISK_OK.has(d.risk_flag);
     const confident = AUTO_CONF_OK.has(d.llm_confidence);
     const clean = !diffHasViolations(d.rationale);
-    if (riskOk && confident && clean) {
+    // 可読性ガード: ハウススタイル逸脱 (過剰統合・本文の壁) は自動承認から除外し伺いに残す。
+    const readVios = checkReadability(d.daiki_edit_content || d.content_after).violations;
+    const readable = readVios.length === 0;
+    if (riskOk && confident && clean && readable) {
       approve.run(d.id);
       autoApproved++;
     } else {
@@ -553,6 +570,7 @@ function autoJudgeSession(sessionId) {
           !clean && 'compliance違反',
           !riskOk && `risk:${d.risk_flag}`,
           !confident && `conf:${d.llm_confidence}`,
+          ...readVios.map((v) => `可読性:${v.type}(${v.chars})`),
         ].filter(Boolean),
       });
     }

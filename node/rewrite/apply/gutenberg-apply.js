@@ -25,6 +25,7 @@
  */
 
 const cheerio = require('cheerio');
+const { splitParagraphsInHtml, splitBlockParagraphs } = require('./paragraph-splitter');
 
 // run (本文の連続塊) を構成できる = 安全に書き換えてよいブロック型。
 const SAFE_BLOCK_TYPES = new Set([
@@ -233,6 +234,26 @@ function makeRunResolver(view) {
 
 const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
 
+// 箇条書きの house style 装飾 (A: 薄色BOX。既存記事で最多の箇条書き表現)。
+function decorateListBoxA(listOuter) {
+  // ul/ol に padding-left が無ければ付与 (素のリストを既存スタイルに合わせる)
+  const styled = listOuter.replace(/^<(ul|ol)\b([^>]*)>/i, (m, tag, attrs) =>
+    /style=/i.test(attrs) ? m : `<${tag}${attrs} style="padding-left:20px; margin:0;">`);
+  return `<div style="margin-bottom:15px; padding:12px 16px; background-color:#e6f2ff; border-radius:5px;">\n${styled}\n</div>`;
+}
+
+// div/section が「装飾BOX」か (inline style に背景/枠、または box-/swell class)。
+function isDecoratedBox($, node) {
+  const $el = $(node);
+  const cls = ($el.attr('class') || '').toLowerCase();
+  if (/box-|soico-cta|swell/.test(cls)) return true;
+  const style = ($el.attr('style') || '').toLowerCase();
+  if (/background(-color)?\s*:/.test(style) && !/transparent|rgba?\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0/.test(style)) return true;
+  if (/border\s*:\s*[^;]*\b[1-9]/.test(style) || /border-(top|right|bottom|left)\s*:\s*[^;]*\b[1-9]/.test(style)) return true;
+  // 直下に装飾された子divを持つ (B ヘッダー付きBOX の外枠など)
+  return false;
+}
+
 /**
  * content_after (LLM 生成の HTML 断片) を Gutenberg ブロック markup に変換する。
  * 既知の要素のみ native ブロック化、未知要素は wp:html で包んで保全。
@@ -240,7 +261,10 @@ const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
 function htmlToBlocks(html) {
   if (typeof html !== 'string' || html.trim() === '') return '';
   // 既に Gutenberg block markup なら二重ラップしない (編集欄でブロック markup を直接編集した場合)。
-  if (/^\s*<!--\s*wp:/.test(html)) return html.trim();
+  // ただし wp:paragraph 内の長い <p> は2行ブロックに分割する (空行リズムの保証)。
+  if (/^\s*<!--\s*wp:/.test(html)) return splitBlockParagraphs(html.trim());
+  // 生HTML: 裸 <p> を2行ブロックに分割してから native ブロック化する。
+  html = splitParagraphsInHtml(html);
   const $ = cheerio.load(html, { decodeEntities: false });
   const root = $('body').length ? $('body')[0] : null;
   const nodes = root ? root.children : [];
@@ -265,11 +289,15 @@ function htmlToBlocks(html) {
       const lvl = Number(tag.slice(1));
       out.push(wrapBlock('heading', outer, lvl === 2 ? null : { level: lvl }));
     } else if (tag === 'ul' || tag === 'ol') {
-      out.push(wrapBlock('list', outer, tag === 'ol' ? { ordered: true } : null));
+      // 素の箇条書きは house style の薄色BOX(A)で自動装飾 (95%が装飾BOX)。
+      out.push(wrapBlock('html', decorateListBoxA(outer)));
     } else if (tag === 'table') out.push(wrapBlock('table', `<figure class="wp-block-table">${outer}</figure>`));
     else if (tag === 'blockquote') out.push(wrapBlock('quote', outer));
     else if (tag === 'section' || tag === 'div') {
-      // ラッパは展開して子を再帰処理
+      // 装飾BOX (LLM が出した B ヘッダー付きBOX 等、inline style の背景/枠 or box-class) は
+      // そのまま wp:html で保全 (再帰すると中の <ul> を二重装飾してしまう)。
+      if (isDecoratedBox($, node)) { out.push(wrapBlock('html', outer)); continue; }
+      // ただのラッパは展開して子を再帰処理
       const inner = $(node).html() || '';
       const innerBlocks = htmlToBlocks(inner);
       if (innerBlocks) out.push(innerBlocks);
@@ -284,6 +312,28 @@ function htmlToBlocks(html) {
 function wrapBlock(type, innerHtml, attrs) {
   const attrStr = attrs ? ` ${JSON.stringify(attrs)}` : '';
   return `<!-- wp:${type}${attrStr} -->\n${innerHtml}\n<!-- /wp:${type} -->`;
+}
+
+// 空ブロック (空行) — リライト本文の段落間に「もう一段の改行」を入れる (Daiki 指定)。
+const PARAGRAPH_SPACER = '<!-- wp:paragraph -->\n<p>&nbsp;</p>\n<!-- /wp:paragraph -->';
+
+/**
+ * 連続する段落ブロックの間に空ブロックを挿入する (リライト本文のみ適用)。
+ * リスト/テーブル/BOX/見出し等は元々余白があるため、段落↔段落のみ対象。
+ */
+function insertParagraphSpacers(markup) {
+  if (typeof markup !== 'string' || markup.trim() === '') return markup;
+  const blocks = parseTopLevelBlocks(markup);
+  if (blocks.length < 2) return markup;
+  const parts = [];
+  for (let i = 0; i < blocks.length; i++) {
+    parts.push(blocks[i].markup);
+    const next = blocks[i + 1];
+    if (next && blocks[i].type === 'paragraph' && next.type === 'paragraph') {
+      parts.push(PARAGRAPH_SPACER);
+    }
+  }
+  return parts.join('\n\n');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -311,6 +361,20 @@ function planGutenbergApply(raw, diffs) {
       continue;
     }
     const after = (d.daiki_edit_content || d.content_after || '').trim();
+
+    // 空BOX補完: content_before(空BOX markup) を raw 内で照合し、その範囲を filled BOX に置換。
+    // 見出しアンカーではなく markup 一致で位置特定する (offset 変動に強い)。
+    if (d.change_type === 'fill_empty_box') {
+      const before = (d.content_before || '').trim();
+      if (!before || !after) { skipped.push({ diff_id: d.id, reason: 'fill_empty_box: content_before/after 空' }); continue; }
+      const idx = raw.indexOf(before);
+      if (idx < 0) { skipped.push({ diff_id: d.id, reason: '空BOX が raw に見つからない (記事変動の可能性)' }); continue; }
+      if (raw.indexOf(before, idx + 1) >= 0) { skipped.push({ diff_id: d.id, reason: '空BOX markup が複数一致 (一意特定できず) → skip' }); continue; }
+      ops.push({ diff_id: d.id, start: idx, end: idx + before.length, markup: after });
+      planned.push({ diff_id: d.id, target_section: d.target_section, op: 'fill_empty_box', after_len: after.length });
+      continue;
+    }
+
     const isInsert = INSERT_TYPES.has(d.change_type);
     const isRewrite = REWRITE_TYPES.has(d.change_type);
     if (!isInsert && !isRewrite) {
@@ -325,7 +389,7 @@ function planGutenbergApply(raw, diffs) {
     const hIdx = findHeadingIndex(blocks, target);
     if (hIdx < 0) { skipped.push({ diff_id: d.id, reason: 'アンカー見出しが raw に見つからない (記事が変動した可能性)' }); continue; }
 
-    const markup = htmlToBlocks(after);
+    const markup = insertParagraphSpacers(htmlToBlocks(after));
     if (!markup) { skipped.push({ diff_id: d.id, reason: 'content_after をブロック化できない' }); continue; }
 
     const anchor = blocks[hIdx];
