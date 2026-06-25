@@ -10,6 +10,7 @@ const { sessionCostUsd } = require('../llm-execution/cost');
 const { checkReadability } = require('../llm-execution/readability-checker');
 const { getModels, setModels, ALLOWED_MODELS } = require('../../shared/llm-adapters/anthropic-adapter');
 const { planGutenbergApply, applyGutenbergOps, htmlToBlocks } = require('../apply/gutenberg-apply');
+const { detectEmptyTitleBoxes } = require('../apply/empty-box-detector');
 const { classifyDomain, collectCompetitorCorpus } = require('../competitor-corpus/collect');
 const { extractForQueryFanout } = require('../fact-set/extract');
 const { calcIgScore } = require('../fact-set/ig-score');
@@ -542,10 +543,46 @@ function diffHasViolations(rationale) {
 const AUTO_RISK_OK = new Set([null, undefined, '', 'none', 'low']);
 const AUTO_CONF_OK = new Set(['high', 'medium']);
 
+// ─────────────────────────────────────────────────────────────
+// 学習型 auto 承認 (過去の Daiki 判定から held を自己縮小)。
+//   セル = change_type | llm_confidence | risk_flag。
+//   そのセルの実績 (approved/rejected) が「承認率 ≥ LEARN_MIN_RATE かつ サンプル ≥ LEARN_MIN_SAMPLE」
+//   なら学習済み安全 = static ルール (risk none/low) を超えて auto 承認に追加する。
+//   Daiki が判定を重ねるほど閾値超えセルが増え held が減っていく。
+//   compliance / 可読性 / grounding は全セルで常にハードゲート維持 (YMYL 法令・品質ライン)。
+//   conf=low は学習対象外 (常に held)。
+const LEARN_MIN_RATE = 0.95;   // バランス設定 (2026-06-25 Daiki 選択)
+const LEARN_MIN_SAMPLE = 20;
+const cellKey = (changeType, conf, risk) => `${changeType}|${conf}|${risk || 'none'}`;
+
+function learnSafeCells(conn) {
+  const rows = conn.prepare(
+    `SELECT change_type, llm_confidence AS conf, risk_flag AS risk,
+            SUM(daiki_judgment='approved') AS approved,
+            SUM(daiki_judgment='rejected') AS rejected
+     FROM master_rewrite_diff
+     WHERE daiki_judgment IN ('approved','rejected') AND llm_confidence IN ('high','medium')
+     GROUP BY change_type, llm_confidence, risk_flag`
+  ).all();
+  const safe = new Set();
+  const learned = [];
+  for (const r of rows) {
+    const decided = (r.approved || 0) + (r.rejected || 0);
+    if (decided < LEARN_MIN_SAMPLE) continue;
+    const rate = (r.approved || 0) / decided;
+    if (rate < LEARN_MIN_RATE) continue;
+    const key = cellKey(r.change_type, r.conf, r.risk);
+    safe.add(key);
+    learned.push({ key, rate: Math.round(rate * 1000) / 10, n: decided });
+  }
+  return { safe, learned };
+}
+
 function autoJudgeSession(sessionId) {
   const conn = open();
+  const { safe: safeCells, learned } = learnSafeCells(conn);
   const diffs = conn.prepare(
-    `SELECT id, rationale, risk_flag, llm_confidence, daiki_judgment, content_after, daiki_edit_content
+    `SELECT id, change_type, rationale, risk_flag, llm_confidence, daiki_judgment, content_after, daiki_edit_content
      FROM master_rewrite_diff WHERE session_id=? AND daiki_judgment='pending'`
   ).all(sessionId);
   const approve = conn.prepare(
@@ -554,8 +591,10 @@ function autoJudgeSession(sessionId) {
   let autoApproved = 0;
   const held = [];
   for (const d of diffs) {
-    const riskOk = AUTO_RISK_OK.has(d.risk_flag);
     const confident = AUTO_CONF_OK.has(d.llm_confidence);
+    const learnedSafe = confident && safeCells.has(cellKey(d.change_type, d.llm_confidence, d.risk_flag));
+    // risk: static ルール (none/low) または 学習済み安全セル なら OK。
+    const riskOk = AUTO_RISK_OK.has(d.risk_flag) || learnedSafe;
     const clean = !diffHasViolations(d.rationale);
     // 可読性ガード: ハウススタイル逸脱 (過剰統合・本文の壁) は自動承認から除外し伺いに残す。
     const readVios = checkReadability(d.daiki_edit_content || d.content_after).violations;
@@ -575,7 +614,7 @@ function autoJudgeSession(sessionId) {
       });
     }
   }
-  return { auto_approved: autoApproved, held };
+  return { auto_approved: autoApproved, held, learned_cells: learned };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -736,6 +775,15 @@ async function applySessionCore(id, { dryRun = false } = {}) {
 
   // 実適用。snapshot は raw content + title を JSON で保存 (rollback で完全復元)。
   const applied = applyGutenbergOps(wp.content_raw, plan.ops);
+
+  // 完全性チェック: 適用後の本文に「中身が空のままのテンプレBOX」が残っていないか検査。
+  //   box_fill が拾えなかった/リライト restructure が新規追加した 等で空BOXが残ると、
+  //   従来は気付かず公開されていた (securities/5093)。残存したら warning として表面化させる。
+  const emptyBoxesRemaining = detectEmptyTitleBoxes(applied.raw).map((b) => b.label);
+  if (emptyBoxesRemaining.length) {
+    console.warn(`[applySessionCore] session ${id} post ${session.post_id}: 空BOX残存 ${emptyBoxesRemaining.length}件 → ${emptyBoxesRemaining.join(' / ')}`);
+    skipped.push({ diff_id: null, reason: `⚠空BOX残存(${emptyBoxesRemaining.length}): ${emptyBoxesRemaining.join(' / ')} — 補完されず公開。要確認` });
+  }
   conn.prepare(
     `UPDATE master_rewrite_session
      SET wp_snapshot_before_apply=?, wp_apply_started_at=CURRENT_TIMESTAMP
@@ -785,6 +833,7 @@ async function applySessionCore(id, { dryRun = false } = {}) {
   return {
     dry_run: false, post_id: session.post_id, applied: true,
     planned, skipped, applied_count: appliedIds.length,
+    empty_boxes_remaining: emptyBoxesRemaining,
     conflicts: applied.conflicts,
     eyecatch,
   };
