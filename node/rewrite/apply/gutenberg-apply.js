@@ -133,12 +133,28 @@ function findHeadingIndex(blocks, target) {
 }
 
 // section 範囲 = アンカー見出し + 次見出しブロック直前まで (extractSelfArticle の nextUntil(headings) と同義)
+// 注: run 分割/rewrite 照合がこれに依存するため「任意レベルの次見出しで止まる」挙動は変えない。
 function sectionBlockRange(blocks, headingIdx) {
   let endIdx = blocks.length - 1;
   for (let i = headingIdx + 1; i < blocks.length; i++) {
     if (blocks[i].type === 'heading') { endIdx = i - 1; break; }
   }
   return { startIdx: headingIdx, endIdx };
+}
+
+// insert 位置専用の「真のセクション末尾」= 次の level<=L 見出しの直前 (子 H3/H4 は内包する)。
+// sectionBlockRange は任意レベルの見出しで止まるため、H3 子を持つ H2 に insert_after すると
+// 「H2概要と最初のH3の間」に挿入され階層が壊れる (2026-06-26 securities/8735 で発覚)。
+// 階層を考慮し、親見出しセクション全体の末尾を返す。
+function sectionEndForInsert(blocks, headingIdx) {
+  const level = blocks[headingIdx].headingLevel;
+  let endIdx = blocks.length - 1;
+  for (let i = headingIdx + 1; i < blocks.length; i++) {
+    if (blocks[i].type === 'heading' && blocks[i].headingLevel != null && blocks[i].headingLevel <= level) {
+      endIdx = i - 1; break;
+    }
+  }
+  return endIdx;
 }
 
 // section 本文を「run」(保護ブロックで区切られた連続本文ブロックの塊) に分割する。
@@ -382,8 +398,14 @@ function planGutenbergApply(raw, diffs) {
       if (d.change_type === 'insert_before') {
         ops.push({ diff_id: d.id, start: anchor.start, end: anchor.start, markup: markup + '\n\n' });
       } else {
-        // insert_after / insert_evidence: section の末尾ブロックの後ろ (次見出し直前)
-        const pos = blocks[endIdx].end;
+        // insert_after / insert_evidence: 親セクション全体の末尾(子H3/H4を内包)に挿入し、
+        // さらに末尾の CTA/ボタン(再利用ブロック・soico-cta/*)があればその手前へ巻き戻す。
+        //   - 階層対応: securities/8735 (新H2が親H2の最初のH3の前に入る不具合)
+        //   - CTA巻き戻し: securities/7344 (CTAボタンの下に本文が入る不具合)
+        let insIdx = sectionEndForInsert(blocks, hIdx);
+        const isTailCta = (b) => b.type === 'block' || b.type.startsWith('soico-cta/');
+        while (insIdx > hIdx && isTailCta(blocks[insIdx])) insIdx--;
+        const pos = blocks[insIdx].end;
         ops.push({ diff_id: d.id, start: pos, end: pos, markup: '\n\n' + markup });
       }
       planned.push({ diff_id: d.id, target_section: d.target_section, op: d.change_type, after_len: after.length });
@@ -425,18 +447,59 @@ function planGutenbergApply(raw, diffs) {
  * @returns {{ raw: string, applied: number, conflicts: Array }}
  */
 function applyGutenbergOps(raw, ops) {
-  const sorted = [...ops].sort((a, b) => b.start - a.start);
+  // start 降順で末尾から splice。同一 start の挿入(複数 op が同一アンカー末尾を指す)は、
+  // 元の ops 配列順(=diff_order 昇順)が出力で保たれるよう index 降順をタイブレークにする。
+  // (末尾から処理するため、後に処理した op ほど左=先頭に来る → index 大を先に処理させる)
+  const decorated = ops.map((op, i) => ({ op, i }));
+  decorated.sort((a, b) => (b.op.start - a.op.start) || (b.i - a.i));
   const conflicts = [];
   let lastStart = Infinity;
   let out = raw;
   let applied = 0;
-  for (const op of sorted) {
+  for (const { op } of decorated) {
     if (op.end > lastStart) { conflicts.push(op.diff_id); continue; } // 直前(より後ろ)の op と範囲が重なる
     out = out.slice(0, op.start) + op.markup + out.slice(op.end);
     lastStart = op.start;
     applied++;
   }
   return { raw: out, applied, conflicts };
+}
+
+/**
+ * バッチ適用 (二段/反復)。op 間の依存 — あるinsertが生成した見出しを別diffが
+ * アンカーにするケース — を解決する。plan は元raw1回パースのため、新規見出しを
+ * 参照する diff は「アンカー未検出」で skip される (2026-06-26 securities/8735)。
+ * 「アンカー未検出」で落ちた diff だけを、前段適用後の新raw で再プランして反復する。
+ *
+ * @returns {{ raw, planned: Array, skipped: Array, conflicts: Array }}
+ *   planned/skipped は plan*() と同形 (diff_id を含む)。
+ */
+const ANCHOR_MISS_RE = /アンカー見出しが raw に見つからない/;
+function applyBatch(raw, diffs) {
+  let cur = raw;
+  let remaining = diffs;
+  const planned = [];
+  const conflicts = [];
+  const skipped = [];
+  // 反復上限 = diff 数 + 1 (アンカーが永久に現れない diff は ops 0 で確定 skip に落ちる)
+  for (let pass = 0; pass <= diffs.length; pass++) {
+    const p = planGutenbergApply(cur, remaining);
+    if (p.ops.length) {
+      const a = applyGutenbergOps(cur, p.ops);
+      cur = a.raw;
+      conflicts.push(...a.conflicts);
+    }
+    planned.push(...p.planned);
+    const noProgress = p.ops.length === 0;
+    const retryIds = new Set(
+      p.skipped.filter((s) => !noProgress && ANCHOR_MISS_RE.test(s.reason)).map((s) => s.diff_id)
+    );
+    // 再試行対象でない skip は確定 (noProgress 時はアンカー未検出も解決不能=確定)
+    for (const s of p.skipped) if (!retryIds.has(s.diff_id)) skipped.push(s);
+    if (noProgress || retryIds.size === 0) break;
+    remaining = remaining.filter((d) => retryIds.has(d.id));
+  }
+  return { raw: cur, planned, skipped, conflicts };
 }
 
 module.exports = {
@@ -451,6 +514,8 @@ module.exports = {
   makeRunResolver,
   protectedLabel,
   htmlToBlocks,
+  sectionEndForInsert,
   planGutenbergApply,
   applyGutenbergOps,
+  applyBatch,
 };

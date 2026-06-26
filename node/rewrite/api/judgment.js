@@ -9,7 +9,7 @@ const { runBoxFill } = require('../llm-execution/empty-box-filler');
 const { sessionCostUsd } = require('../llm-execution/cost');
 const { checkReadability } = require('../llm-execution/readability-checker');
 const { getModels, setModels, ALLOWED_MODELS } = require('../../shared/llm-adapters/anthropic-adapter');
-const { planGutenbergApply, applyGutenbergOps, htmlToBlocks } = require('../apply/gutenberg-apply');
+const { planGutenbergApply, applyGutenbergOps, applyBatch, htmlToBlocks } = require('../apply/gutenberg-apply');
 const { detectEmptyTitleBoxes } = require('../apply/empty-box-detector');
 const { classifyDomain, collectCompetitorCorpus } = require('../competitor-corpus/collect');
 const { extractForQueryFanout } = require('../fact-set/extract');
@@ -757,7 +757,8 @@ async function applySessionCore(id, { dryRun = false } = {}) {
      FROM master_rewrite_diff WHERE session_id=? ORDER BY diff_order`
   ).all(id);
   const wp = await fetchWpPost(session.post_id);
-  const plan = planGutenbergApply(wp.content_raw, diffs);     // 本文 (insert/rewrite)
+  // 二段適用: insert が生成した見出しを別 diff がアンカーにする依存も解決する。
+  const plan = applyBatch(wp.content_raw, diffs);             // 本文 (insert/rewrite) → {raw,planned,skipped,conflicts}
   const meta = planMetaDiffs(diffs);                          // title / meta description
   const planned = [...plan.planned, ...meta.meta_planned];
   const skipped = [...plan.skipped, ...meta.meta_skipped];
@@ -773,13 +774,11 @@ async function applySessionCore(id, { dryRun = false } = {}) {
     return { dry_run: true, post_id: session.post_id, applied: false, planned, skipped };
   }
 
-  // 実適用。snapshot は raw content + title を JSON で保存 (rollback で完全復元)。
-  const applied = applyGutenbergOps(wp.content_raw, plan.ops);
-
+  // 実適用済みの raw は applyBatch が算出済 (plan.raw)。snapshot は raw+title を JSON 保存 (rollback 用)。
   // 完全性チェック: 適用後の本文に「中身が空のままのテンプレBOX」が残っていないか検査。
   //   box_fill が拾えなかった/リライト restructure が新規追加した 等で空BOXが残ると、
   //   従来は気付かず公開されていた (securities/5093)。残存したら warning として表面化させる。
-  const emptyBoxesRemaining = detectEmptyTitleBoxes(applied.raw).map((b) => b.label);
+  const emptyBoxesRemaining = detectEmptyTitleBoxes(plan.raw).map((b) => b.label);
   if (emptyBoxesRemaining.length) {
     console.warn(`[applySessionCore] session ${id} post ${session.post_id}: 空BOX残存 ${emptyBoxesRemaining.length}件 → ${emptyBoxesRemaining.join(' / ')}`);
     skipped.push({ diff_id: null, reason: `⚠空BOX残存(${emptyBoxesRemaining.length}): ${emptyBoxesRemaining.join(' / ')} — 補完されず公開。要確認` });
@@ -790,7 +789,7 @@ async function applySessionCore(id, { dryRun = false } = {}) {
      WHERE id=?`
   ).run(JSON.stringify({ content_raw: wp.content_raw, title_raw: wp.title_raw }), id);
 
-  const payload = { content: applied.raw };
+  const payload = { content: plan.raw };
   if (meta.newTitle) payload.title = meta.newTitle;
   await updateWpPost(session.post_id, payload);
 
@@ -834,7 +833,7 @@ async function applySessionCore(id, { dryRun = false } = {}) {
     dry_run: false, post_id: session.post_id, applied: true,
     planned, skipped, applied_count: appliedIds.length,
     empty_boxes_remaining: emptyBoxesRemaining,
-    conflicts: applied.conflicts,
+    conflicts: plan.conflicts,
     eyecatch,
   };
 }
