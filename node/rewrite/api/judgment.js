@@ -6,6 +6,7 @@ const { runComplianceCheck } = require('../llm-execution/compliance-runner');
 const { runAnalysis } = require('../llm-execution/analysis-runner');
 const { runDiffGeneration } = require('../llm-execution/diff-runner');
 const { runBoxFill } = require('../llm-execution/empty-box-filler');
+const { runDeletionAnalysis } = require('../llm-execution/deletion-analyzer');
 const { sessionCostUsd } = require('../llm-execution/cost');
 const { checkReadability } = require('../llm-execution/readability-checker');
 const { getModels, setModels, ALLOWED_MODELS } = require('../../shared/llm-adapters/anthropic-adapter');
@@ -1605,6 +1606,23 @@ function buildRouter() {
       return res.status(202).json({ session_id: id, status: 'running', started_at: job.started_at, options: job.options });
     } catch (e) {
       console.error('[POST /judgment/sessions/:id/compliance]', e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/rewrite/judgment/sessions/:id/analyze-deletions
+  //   Level1 冗長削除を提案 → 整合ゲート通過分を delete_run diff (held) として起票。
+  //   削除は自動承認・自動適用しない。承認後の適用は通常 apply フロー。
+  router.post('/sessions/:id/analyze-deletions', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
+      const session = open().prepare(`SELECT id FROM master_rewrite_session WHERE id=?`).get(id);
+      if (!session) return res.status(404).json({ error: 'session not found', id });
+      const r = await runDeletionAnalysis({ session_id: id });
+      return res.json({ session_id: id, ...r });
+    } catch (e) {
+      console.error('[POST /judgment/sessions/:id/analyze-deletions]', e);
       return res.status(500).json({ error: e.message });
     }
   });

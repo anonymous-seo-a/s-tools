@@ -18,6 +18,20 @@
 const cheerio = require('cheerio');
 const { parseTopLevelBlocks, buildRunStructuredView, makeRunResolver } = require('../apply/gutenberg-apply');
 const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
+const db = require('../db');
+
+async function fetchWpRawTitle(postId) {
+  const base = (process.env.WP_API_BASE_URL || '').replace(/\/$/, '');
+  const apiRoot = /\/wp-json\/wp\/v\d+/.test(base) ? base : `${base}/wp-json/wp/v2`;
+  const auth = Buffer.from(`${process.env.WP_API_USERNAME}:${process.env.WP_API_APP_PASSWORD}`).toString('base64');
+  const cb = Date.now(); // cache-bust (CF APO 等の stale 回避)
+  const res = await fetch(`${apiRoot}/posts/${postId}?context=edit&_fields=title,content&_cb=${cb}`, {
+    headers: { Authorization: `Basic ${auth}`, 'Cache-Control': 'no-cache' },
+  });
+  if (!res.ok) throw new Error(`WP REST ${res.status} for post ${postId}`);
+  const p = await res.json();
+  return { raw: p.content?.raw || '', title: p.title?.raw || p.title?.rendered || '' };
+}
 
 const EXTERNAL_LINK_RE = /<a\s[^>]*href\s*=\s*["']https?:\/\//i;
 const plain = (m) => m.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
@@ -178,4 +192,51 @@ async function proposeRedundancyDeletions({ raw, title, facts = [], competitorKe
   return { candidates, raw_proposals: proposals.length, usage: res.usage };
 }
 
-module.exports = { detectDuplicateParagraphs, consistencyGate, proposeRedundancyDeletions };
+/**
+ * UI 判定フロー連携: セッションの記事から Level1 冗長削除を提案し、ゲート通過候補を
+ * delete_run diff として master_rewrite_diff に挿入する (daiki_judgment='pending',
+ * confidence='low' = 自動承認除外=常に手動判定)。判定UIに他diffと並んで表示される。
+ *   - 削除は最高リスクのため自動適用は一切しない。承認後の適用は通常の apply フローに乗る。
+ *   - Level0(完全一致重複)は markup 非一意のため本フローではなく決定論直接適用を別途使う。
+ * @returns {{ detected, inserted, gated_out }}
+ */
+async function runDeletionAnalysis({ session_id }) {
+  if (!Number.isInteger(session_id)) throw new Error('runDeletionAnalysis: session_id required');
+  const conn = db.open();
+  const session = conn.prepare('SELECT id, post_id FROM master_rewrite_session WHERE id=?').get(session_id);
+  if (!session) throw new Error(`session ${session_id} not found`);
+  const { raw, title } = await fetchWpRawTitle(session.post_id);
+  const facts = conn.prepare('SELECT content, source_url FROM master_fact_set WHERE post_id=? ORDER BY layer').all(session.post_id);
+  const eyecatchText = ''; // 将来: アイキャッチ焼込みテキストを渡せば②の精度向上
+
+  const { candidates, raw_proposals } = await proposeRedundancyDeletions({ raw, title, facts, eyecatchText });
+  const safe = candidates.filter((c) => c.gate_safe);
+  const gatedOut = candidates.length - safe.length;
+  if (safe.length === 0) return { detected: raw_proposals, inserted: 0, gated_out: gatedOut };
+
+  const maxOrder = conn.prepare('SELECT COALESCE(MAX(diff_order),0) m FROM master_rewrite_diff WHERE session_id=?').get(session_id).m;
+  const ins = conn.prepare(
+    `INSERT INTO master_rewrite_diff
+       (session_id, diff_order, target_section, change_type, change_category,
+        content_before, content_after, rationale, llm_confidence, risk_flag)
+     VALUES (?, ?, ?, 'delete_run', 'major_restructure', ?, NULL, ?, 'low', ?)`
+  );
+  const tx = conn.transaction((rows) => {
+    rows.forEach((c, i) => {
+      const rationale = JSON.stringify({
+        primary_source: 'deletion_analysis_level1',
+        reason: c.reason,
+        info_preserved: c.info_preserved,
+        gate: { safe: c.gate_safe, violations: c.violations, warnings: c.warnings },
+        auto_hold_reasons: ['削除は手動判定必須'],
+      });
+      // warning があれば risk=medium で更に目立たせる (参照/タイトル矛盾の疑い)
+      const risk = (c.warnings && c.warnings.length) ? 'medium' : 'low';
+      ins.run(session_id, maxOrder + i + 1, c.target_section, c.content_before, rationale, risk);
+    });
+  });
+  tx(safe);
+  return { detected: raw_proposals, inserted: safe.length, gated_out: gatedOut };
+}
+
+module.exports = { detectDuplicateParagraphs, consistencyGate, proposeRedundancyDeletions, runDeletionAnalysis };
