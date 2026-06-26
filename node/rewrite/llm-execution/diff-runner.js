@@ -240,6 +240,23 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
+  // insert 系の target_section 妥当性検証用: 既存記事の見出し + このバッチの insert が
+  // 新規作成する見出し(二段適用で解決される) を有効ターゲット集合とする。
+  // 集合に無い target は「見出しレベル誤り/存在しない見出し」= apply で必ずスキップされる
+  // 壊れ diff。承認後に黙って消える事故を防ぐため held(low) にする (securities/6007 で発覚:
+  // h3 見出しを h2# で指定し insert 4件が全スキップ→半導体ファンド追記が丸ごと欠落)。
+  const INSERT_CT = new Set(['insert_before', 'insert_after', 'insert_evidence']);
+  const normTarget = (t) => String(t || '').replace(/\s+/g, ''); // 空白差での誤検出を回避
+  const validTargets = new Set(articleView.map((s) => normTarget(s.target_section)));
+  for (const d of accepted) {
+    if (!INSERT_CT.has(d.change_type)) continue;
+    const after = d.content_after || '';
+    for (const m of String(after).matchAll(/<(h[1-6])[^>]*>([\s\S]*?)<\/\1>/gi)) {
+      const txt = m[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      if (txt) validTargets.add(normTarget(`h${m[1].slice(1)}#${txt}`));
+    }
+  }
+
   // rewrite_run の content_before は (target_section, run_index) から run の raw markup を
   // server side で補填する (LLM の hallucination 排除 + apply の照合キーになる)。
   // insert 系 / meta 系 / run 解決不可は content_before = null。
@@ -253,6 +270,8 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
         const runMarkup = resolveRun(d.target_section, d.run_index);
         if (runMarkup) { contentBefore = runMarkup; server_resolved_count++; }
         else resolveFailed = true; // target_section が見出しでない / run_index 不正 → 適用不能
+      } else if (INSERT_CT.has(d.change_type) && d.target_section && !validTargets.has(normTarget(d.target_section))) {
+        resolveFailed = true; // target 見出しが存在しない/レベル誤り → apply で必ずスキップされる壊れ diff
       }
       const g = gated[idx] || {};
       // 出典ゲート結果を rationale に記録し、held は confidence='low' で自動承認から外す。
