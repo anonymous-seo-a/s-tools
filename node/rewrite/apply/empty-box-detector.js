@@ -21,6 +21,9 @@ const TITLE_ENDINGS = [
   // recall 監査(2026-06-25)で取りこぼしが判明した体言止め末尾を追加。
   // callout化しやすい 率/水準/リスク 等は足さない (precision 防御を維持)。
   '項目', '対策', '方法', '機能', 'ツール', '要件', '限度額', '優遇', '使い分け',
+  // 2026-06-26 securities/8735: デメリット下の「対処法」boxが空のまま残存。
+  // 「対処方法」は既存「方法」で拾えるが「対処法」(末尾=法)は未捕捉だった。
+  '対処法',
 ];
 // table 形式 = 2項目以上の対比 (比較/違い/対応表/早見表)。
 // 料金体系/料金表/手数料体系/一覧 は soico の house style では箇条書き (Daiki 指定)。
@@ -28,6 +31,12 @@ const TABLE_ENDINGS = ['比較', '違い', '対応表', '早見表'];
 const SENTENCE_END = /(です|ます|ません|でした|ない|だ|た|る|い|ね|よ|か|。|！|？|\?|!|でしょう|ください|ましょう|できる|できます|あります|なります|されます|可能|不可|無料|注意|推奨)\s*$/;
 
 const jaLen = (s) => (s || '').replace(/\s+/g, '').length;
+
+// 「中身が抜けるテンプレBOX」の固定タグ署名 (Daiki 指摘 2026-06-26: ドロップするboxの
+// タグは毎回同じ)。securities 実記事で空BOXは全てこの黄色callout署名を持ち、
+// #eef6fb(概要カード)/#007BFF(青ヘッダ)等の充填済box とは署名で峻別できる。
+// ラベル語彙(TITLE_ENDINGS)に依存せず構造で捕捉する主シグナル。
+const TEMPLATE_SIGNATURE_RE = /background-color:\s*#fffbe6|border-left:\s*\d+px\s+solid\s+#f5a623/i;
 
 function classifyFormat(label) {
   return TABLE_ENDINGS.some((t) => label.endsWith(t)) ? 'table' : 'list';
@@ -93,10 +102,14 @@ function detectEmptyTitleBoxes(raw) {
     if (hasMedia || bodyLen >= 8) continue;
 
     const clean = label.replace(/[　\s]+$/, '');
+    // 捕捉条件は「固定タグ署名」を主とし、語彙(TITLE_ENDINGS)は genre 横断の補助とする。
+    // どちらかが positive なら候補 (例: 「対処法」「使い分けの具体例」は語彙に無いが署名で捕捉)。
+    const sigMatch = TEMPLATE_SIGNATURE_RE.test(div.attr('style') || '');
     const endsTitle = TITLE_ENDINGS.some((t) => clean.endsWith(t));
+    // 精度ガード: 体言止めでなく文(節助詞/句読点/文末/長文)に見えるものは除外 (一文ポイントBOX保護)。
     const hasClauseParticle = /[がはも]/.test(clean);
     const looksSentence = SENTENCE_END.test(clean) || /[、，]/.test(clean) || clean.length > 28;
-    if (!endsTitle || hasClauseParticle || looksSentence) continue;
+    if ((!sigMatch && !endsTitle) || hasClauseParticle || looksSentence) continue;
 
     out.push({
       label: clean,
