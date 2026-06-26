@@ -590,7 +590,14 @@ function autoJudgeSession(sessionId) {
   );
   let autoApproved = 0;
   const held = [];
+  // 削除系は本質的に高リスク(競合網羅喪失/参照破壊/矛盾)。Daiki 指示で常に手動判定必須とし
+  // 自動承認から無条件除外する (2026-06-26 削除機能導入時の安全弁)。
+  const DELETE_CHANGE_TYPES = new Set(['delete_run', 'delete_section']);
   for (const d of diffs) {
+    if (DELETE_CHANGE_TYPES.has(d.change_type)) {
+      held.push({ diff_id: d.id, reasons: ['削除は手動判定必須 (自動承認対象外)'] });
+      continue;
+    }
     const confident = AUTO_CONF_OK.has(d.llm_confidence);
     const learnedSafe = confident && safeCells.has(cellKey(d.change_type, d.llm_confidence, d.risk_flag));
     // risk: static ルール (none/low) または 学習済み安全セル なら OK。

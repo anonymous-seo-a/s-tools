@@ -341,6 +341,52 @@ function wrapBlock(type, innerHtml, attrs) {
 
 const INSERT_TYPES = new Set(['insert_before', 'insert_after', 'insert_evidence']);
 const REWRITE_TYPES = new Set(['rewrite_section', 'rewrite_paragraph', 'rewrite_run']);
+const DELETE_TYPES = new Set(['delete_run', 'delete_section']);
+
+// 末尾/先頭の余分な空行を1つに畳む (削除で空行が連続するのを防ぐ)。
+function trimDeletionSeam(raw, start, end) {
+  // 削除範囲の前後に連続する改行を 2つ(段落区切り1つ)に正規化する。
+  let s = start, e = end;
+  while (s > 0 && /\s/.test(raw[s - 1])) s--;
+  while (e < raw.length && /\s/.test(raw[e])) e++;
+  return { start: s, end: e, sep: '\n\n' };
+}
+
+/**
+ * 削除 op を計画する。安全第一: 一次情報(外部リンク=出典)・保護ブロック(再利用/CTA/画像/html/
+ * embed)を含む範囲は決して削除しない。範囲特定はこの apply 層の責務に限定し、
+ * 「削除してよいか」の意味判断(SEO見出し/参照整合/タイトル矛盾)は生成側ゲート(deletion-analyzer)が担う。
+ *   - delete_run:     content_before(run markup) を section 内で一意照合し、その範囲を削除。
+ *   - delete_section: target_section の見出しから 次の同格以上見出し直前まで(子H3含む)を削除。
+ * @returns {{start,end} | {skip}}
+ */
+function planDelete(raw, blocks, d) {
+  if (d.change_type === 'delete_run') {
+    const before = (d.content_before || '').trim();
+    if (!before) return { skip: 'delete_run: content_before(run markup) が無い' };
+    if (PROTECTED_MARKUP_RE.test(before)) return { skip: 'delete対象に保護ブロックが含まれる → 拒否' };
+    if (hasExternalLink(before)) return { skip: 'delete対象に外部リンク(出典=一次情報) → 拒否' };
+    const idx = raw.indexOf(before);
+    if (idx < 0) return { skip: 'delete対象 run が raw に見つからない (記事変動)' };
+    if (raw.indexOf(before, idx + 1) >= 0) return { skip: 'delete対象 run markup が複数一致 (一意特定できず) → 拒否' };
+    const seam = trimDeletionSeam(raw, idx, idx + before.length);
+    return { start: seam.start, end: seam.end };
+  }
+  // delete_section
+  const target = parseTarget(d.target_section);
+  if (!target) return { skip: `delete_section: target_section が h*# でない (${d.target_section})` };
+  const hIdx = findHeadingIndex(blocks, target);
+  if (hIdx < 0) return { skip: 'delete_section: アンカー見出しが raw に見つからない' };
+  const endIdx = sectionEndForInsert(blocks, hIdx); // 子H3/H4 を内包する真のセクション末尾
+  const rangeStart = blocks[hIdx].start;
+  const rangeEnd = blocks[endIdx].end;
+  const slice = raw.slice(rangeStart, rangeEnd);
+  // セクション内に保護ブロックや出典を一つでも含むなら削除しない (一次情報/再利用ブロック保護)。
+  if (PROTECTED_MARKUP_RE.test(slice)) return { skip: 'delete_section: 範囲に保護ブロック(再利用/CTA/画像/html)を含む → 拒否' };
+  if (hasExternalLink(slice)) return { skip: 'delete_section: 範囲に外部リンク(出典=一次情報)を含む → 拒否' };
+  const seam = trimDeletionSeam(raw, rangeStart, rangeEnd);
+  return { start: seam.start, end: seam.end };
+}
 
 /**
  * @param {string} raw content.raw
@@ -371,6 +417,16 @@ function planGutenbergApply(raw, diffs) {
       if (raw.indexOf(before, idx + 1) >= 0) { skipped.push({ diff_id: d.id, reason: '空BOX markup が複数一致 (一意特定できず) → skip' }); continue; }
       ops.push({ diff_id: d.id, start: idx, end: idx + before.length, markup: after });
       planned.push({ diff_id: d.id, target_section: d.target_section, op: 'fill_empty_box', after_len: after.length });
+      continue;
+    }
+
+    // 削除 (delete_run / delete_section)。content_after 不要。安全ガードを最優先で適用:
+    //   保護ブロック(再利用/CTA/画像/html) と 外部リンク(出典=一次情報) を含む範囲は絶対に削除しない。
+    if (DELETE_TYPES.has(d.change_type)) {
+      const del = planDelete(raw, blocks, d);
+      if (del.skip) { skipped.push({ diff_id: d.id, reason: del.skip }); continue; }
+      ops.push({ diff_id: d.id, start: del.start, end: del.end, markup: '' });
+      planned.push({ diff_id: d.id, target_section: d.target_section, op: d.change_type, after_len: 0 });
       continue;
     }
 
@@ -515,6 +571,8 @@ module.exports = {
   protectedLabel,
   htmlToBlocks,
   sectionEndForInsert,
+  planDelete,
+  DELETE_TYPES,
   planGutenbergApply,
   applyGutenbergOps,
   applyBatch,
