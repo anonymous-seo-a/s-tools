@@ -16,7 +16,8 @@
  */
 
 const cheerio = require('cheerio');
-const { parseTopLevelBlocks } = require('../apply/gutenberg-apply');
+const { parseTopLevelBlocks, buildRunStructuredView, makeRunResolver } = require('../apply/gutenberg-apply');
+const { sonnet } = require('../../shared/llm-adapters/anthropic-adapter');
 
 const EXTERNAL_LINK_RE = /<a\s[^>]*href\s*=\s*["']https?:\/\//i;
 const plain = (m) => m.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
@@ -111,4 +112,70 @@ function consistencyGate(raw, targetMarkup, opts = {}) {
   return { safe: violations.length === 0, violations, warnings };
 }
 
-module.exports = { detectDuplicateParagraphs, consistencyGate };
+// ── Level 1: LLM による冗長削除提案 + 整合ゲート ────────────────
+const REDUNDANCY_SYSTEM = `あなたは YMYL(金融) 記事の編集者。記事内の「余剰な本文(run)」を特定し削除を提案する。
+余剰 = 他の場所で既に十分述べられている情報の重複・言い換え、または必要十分を超えた冗長説明。
+
+# 絶対に削除提案してはいけないもの (違反は重大事故)
+- 一次情報: 出典・公式情報・固有の数値(金額/利率/件数/日付)を含む run。
+- SEO上必要な見出し配下の中核情報・その記事独自のトピック(競合との差別化要素)。
+- 削除すると他の記述・記事タイトル・結論と矛盾が生じる内容。
+- 検索意図(顕在/潜在/安心)への必要な応答。読者が判断に必要とする情報。
+
+# 提案の条件
+- 「その情報が記事内の他のどこで保持されるか(info_preserved)」を必ず具体的に示せること。
+  他に保持先が無い情報は『余剰』ではない → 提案しない。
+- 迷ったら提案しない (precision 優先。削除は追加より危険)。
+
+# 出力 (JSON のみ、コードフェンス不要)
+{ "deletions": [ { "target_section": "h2#... or h3#...", "run_index": <整数>,
+  "reason": "なぜ余剰か", "info_preserved": "同じ情報が保持される場所" } ] }`;
+
+function buildRedundancyPrompt({ title, sections }) {
+  const view = sections.map((s) => {
+    const items = s.items.map((it) => it.kind === 'run'
+      ? `  [run ${it.run_index}] ${it.text.replace(/\s+/g, ' ').slice(0, 200)}`
+      : `  <${it.label}>`).join('\n');
+    return `### ${s.target_section}\n${items}`;
+  }).join('\n\n');
+  return `# 記事タイトル\n${title}\n\n# 記事構造 (各 run が削除候補単位。run_index で指定)\n${view}\n\n# 指示\n余剰な run のみを上記スキーマで提案せよ。該当が無ければ {"deletions":[]} を返す。`;
+}
+
+/**
+ * Level1: LLM が冗長 run を提案 → run markup 解決 → consistencyGate で ①②③ 精査。
+ * 通過した候補のみ返す (delete_run diff 化は呼び出し側。自動適用は絶対にしない=常に Daiki 判定)。
+ * @returns {{ candidates:Array, raw_proposals:number, usage }}
+ */
+async function proposeRedundancyDeletions({ raw, title, facts = [], competitorKeywords = [], eyecatchText = '' }) {
+  const view = buildRunStructuredView(raw);
+  const resolve = makeRunResolver(view);
+  const res = await sonnet({ system: REDUNDANCY_SYSTEM, user: buildRedundancyPrompt({ title, sections: view }), maxTokens: 2048 });
+  let proposals = [];
+  try {
+    let t = (res.text || '').trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+    const s = t.indexOf('{'); const e = t.lastIndexOf('}');
+    if (s >= 0 && e > s) t = t.slice(s, e + 1);
+    proposals = JSON.parse(t).deletions || [];
+  } catch (e) { return { candidates: [], raw_proposals: 0, usage: res.usage, parse_error: e.message }; }
+
+  const candidates = [];
+  for (const p of proposals) {
+    const markup = resolve(p.target_section, p.run_index);
+    if (!markup) { continue; } // 解決不能 = 提案無効
+    const gate = consistencyGate(raw, markup, { title, eyecatchText, competitorKeywords });
+    candidates.push({
+      target_section: p.target_section,
+      run_index: p.run_index,
+      change_type: 'delete_run',
+      content_before: markup,
+      reason: p.reason || '',
+      info_preserved: p.info_preserved || '',
+      gate_safe: gate.safe,
+      violations: gate.violations,
+      warnings: gate.warnings,
+    });
+  }
+  return { candidates, raw_proposals: proposals.length, usage: res.usage };
+}
+
+module.exports = { detectDuplicateParagraphs, consistencyGate, proposeRedundancyDeletions };
