@@ -6,11 +6,46 @@
 const cheerio = require('cheerio');
 const db = require('./monitor-db');
 
-const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+// UA はローテーション (パターン検知回避)。429/403 対策の一環。
+const UA_POOL = [
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+];
+const pickUA = () => UA_POOL[Math.floor(Math.random() * UA_POOL.length)];
+const UA = UA_POOL[0]; // 後方互換 (直接参照箇所用)
 const MAX_PAGES = 5;        // 50件 × 5 = 最大 200 位まで調査
 const RESULTS_PER_PAGE = 10;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+const jitter = (ms) => ms + Math.floor(Math.random() * Math.min(ms, 8000));
+
+// Yahoo throttle (429/403) 対策の統一 fetch。バックオフ+jitter+UAローテ+Retry-After尊重で再試行。
+// 全リトライ後も throttle なら最後の res を返す (呼び出し側で判定)。
+const YAHOO_BACKOFF_MS = [30_000, 90_000, 180_000];
+async function yahooFetch(searchUrl, { retries = 3 } = {}) {
+  let attempt = 0;
+  while (true) {
+    const res = await fetch(searchUrl, {
+      headers: {
+        'User-Agent': pickUA(),
+        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      },
+    });
+    if ((res.status === 429 || res.status === 403) && attempt < retries) {
+      const ra = parseInt(res.headers.get('retry-after') || '', 10);
+      const base = YAHOO_BACKOFF_MS[Math.min(attempt, YAHOO_BACKOFF_MS.length - 1)];
+      const wait = jitter(ra > 0 ? ra * 1000 : base);
+      attempt++;
+      console.warn(`[yahooFetch] HTTP ${res.status} — backoff ${Math.round(wait / 1000)}s (${attempt}/${retries})`);
+      await sleep(wait);
+      continue;
+    }
+    return res;
+  }
+}
 
 function normalizeUrl(u) {
   try {
@@ -25,20 +60,15 @@ function normalizeUrl(u) {
  * Yahoo! 検索 1 KW → 最大 MAX_PAGES*RESULTS_PER_PAGE 件の結果 URL を収集。
  * 記事 URL が含まれていれば順位 (1-based) を返す。なければ null。
  */
-async function searchYahooRank({ keyword, targetUrl }) {
+async function searchYahooRank({ keyword, targetUrl }, { maxPages = 3 } = {}) {
   const normTarget = normalizeUrl(targetUrl);
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; page < maxPages; page++) {
     const start = page * RESULTS_PER_PAGE + 1;
     const searchUrl = `https://search.yahoo.co.jp/search?p=${encodeURIComponent(keyword)}&b=${start}`;
-    const res = await fetch(searchUrl, {
-      headers: {
-        'User-Agent': UA,
-        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      },
-    });
+    const res = await yahooFetch(searchUrl);
     if (!res.ok) {
       if (res.status === 429 || res.status === 403) {
+        // バックオフ全リトライ後も throttle。throw して呼び出し側の連続失敗ガードに委ねる。
         throw new Error(`Yahoo throttled: HTTP ${res.status}`);
       }
       return { rank: null, note: `http_${res.status}` };
@@ -63,11 +93,11 @@ async function searchYahooRank({ keyword, targetUrl }) {
         return { rank: start + i, note: null };
       }
     }
-    // 次ページ要否: MAX_PAGES に達するか、ページ結果が少なすぎる場合は打ち切り
+    // 次ページ要否: maxPages に達するか、ページ結果が少なすぎる場合は打ち切り
     if (links.length < 5) break;
-    await sleep(1500); // ページング間はクールダウン短めに
+    await sleep(jitter(2500)); // ページング間クールダウン (jitter付き)
   }
-  return { rank: null, note: 'not_found_top' + (MAX_PAGES * RESULTS_PER_PAGE) };
+  return { rank: null, note: 'not_found_top' + (maxPages * RESULTS_PER_PAGE) };
 }
 
 // リライト適用済み記事 (直近 lookbackDays 日) の post_id を rewrite.db から取得。
@@ -118,22 +148,31 @@ async function runYahooDailyScrape({ limit = 200, intervalSec = 15, onProgress }
   const jobId = db.startJob('yahoo_scrape', { limit, intervalSec });
   const date = new Date().toISOString().slice(0, 10);
   let succeeded = 0, failed = 0, notFound = 0;
+  let consecFail = 0;          // 連続失敗 (throttle カスケード検知)
+  let curIntervalMs = intervalSec * 1000;
   try {
     const targets = getScrapeTargets(limit);
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
+      let throttled = false;
       try {
         const { rank, note } = await searchYahooRank({ keyword: t.top_kw, targetUrl: t.url });
         db.upsertScrapedRank({ post_id: t.post_id, date, engine: 'yahoo', keyword: t.top_kw, rank, note });
         if (rank != null) succeeded++; else notFound++;
+        consecFail = 0;
+        curIntervalMs = intervalSec * 1000; // 成功で間隔を基準に戻す
       } catch (e) {
         failed++;
+        consecFail++;
+        throttled = /throttled/i.test(e.message);
         db.upsertScrapedRank({ post_id: t.post_id, date, engine: 'yahoo', keyword: t.top_kw, rank: null, note: `error:${e.message.slice(0, 80)}` });
-        // 連続 3 失敗したら停止
-        if (failed >= 3 && succeeded === 0) throw new Error(`連続失敗で中断: ${e.message}`);
+        // throttle 連鎖時は間隔を指数的に拡大 (IP冷却)。最大 5 分。
+        if (throttled) curIntervalMs = Math.min(curIntervalMs * 2, 300_000);
+        // 連続失敗が多い = IP がハード throttle。無駄打ちを避け早期中断。
+        if (consecFail >= 8) throw new Error(`連続失敗${consecFail}で中断 (IP throttle 疑い): ${e.message}`);
       }
       if (onProgress) onProgress({ index: i + 1, total: targets.length, succeeded, notFound, failed });
-      if (i < targets.length - 1) await sleep(intervalSec * 1000);
+      if (i < targets.length - 1) await sleep(jitter(curIntervalMs));
     }
     db.finishJob(jobId, { rows_inserted: succeeded + notFound, status: 'success' });
     return { total: targets.length, succeeded, notFound, failed };
@@ -149,28 +188,15 @@ async function runYahooDailyScrape({ limit = 200, intervalSec = 15, onProgress }
  * throttle (429/403) はバックオフ付きで自動リトライ (90s → 240s)。
  * @returns Array<{ link, position }>
  */
-const YAHOO_BACKOFF_MS = [90_000, 240_000];
-
-async function searchYahooResults(keyword, { topN = 10, maxPages = 2, retries = 2 } = {}) {
+async function searchYahooResults(keyword, { topN = 10, maxPages = 2 } = {}) {
   const seen = new Set();
   const out = [];
-  let throttleCount = 0;
   for (let page = 0; page < maxPages && out.length < topN; page++) {
     const start = page * RESULTS_PER_PAGE + 1;
     const searchUrl = `https://search.yahoo.co.jp/search?p=${encodeURIComponent(keyword)}&b=${start}`;
-    const res = await fetch(searchUrl, {
-      headers: { 'User-Agent': UA, 'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
-    });
+    const res = await yahooFetch(searchUrl); // backoff+jitter+UAローテは共通ヘルパに集約
     if (!res.ok) {
       if (res.status === 429 || res.status === 403) {
-        if (throttleCount < retries) {
-          const wait = YAHOO_BACKOFF_MS[Math.min(throttleCount, YAHOO_BACKOFF_MS.length - 1)];
-          throttleCount++;
-          console.warn(`[searchYahooResults] HTTP ${res.status} — backoff ${wait / 1000}s (${throttleCount}/${retries})`);
-          await sleep(wait);
-          page--; // 同じページを再試行
-          continue;
-        }
         throw new Error(`Yahoo throttled: HTTP ${res.status}`);
       }
       break;
@@ -195,7 +221,7 @@ async function searchYahooResults(keyword, { topN = 10, maxPages = 2, retries = 
       if (out.length >= topN) break;
     }
     if (hrefs.length < 5) break;
-    await sleep(3000);
+    await sleep(jitter(3000));
   }
   return out;
 }
