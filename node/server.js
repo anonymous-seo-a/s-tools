@@ -1,3 +1,9 @@
+// iconv-lite の encodings を起動時に eager-load する。
+// raw-body(Express body parser) が charset 付きリクエストで初回に lazy require('../encodings')
+// するが、デプロイ直後のリクエストと競合して "Cannot find module '../encodings'" で
+// POST が落ちる事故があった (2026-06-26, 単発)。起動時に解決済みにして競合を消す。
+try { require('iconv-lite').encodingExists('utf-8'); } catch (e) { console.warn('[boot] iconv-lite warmup skipped:', e.message); }
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');

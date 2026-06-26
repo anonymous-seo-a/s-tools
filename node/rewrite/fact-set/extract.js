@@ -55,11 +55,24 @@ async function fetchWpContent(postId) {
   };
 }
 
+// 実ブラウザ相当のヘッダで取得する。旧来の明示ボットUA('FundIt-RewriteBot')は
+// monex/moneyforward/indeed 等に bot 判定され 403 が多発していた (2026-06-26 ログ確認)。
+const COMPETITOR_UA_POOL = [
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+];
 async function fetchCompetitorHtml(url) {
+  const ua = COMPETITOR_UA_POOL[Math.floor(Math.random() * COMPETITOR_UA_POOL.length)];
+  let host = '';
+  try { host = new URL(url).origin + '/'; } catch {}
   const res = await fetch(url, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; FundIt-RewriteBot/1.0)',
-      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent': ua,
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+      'Upgrade-Insecure-Requests': '1',
+      ...(host ? { Referer: host } : {}),
     },
     redirect: 'follow',
   });

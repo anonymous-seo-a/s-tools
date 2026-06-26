@@ -248,9 +248,11 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
   const tx = conn.transaction((rows) => {
     rows.forEach((d, idx) => {
       let contentBefore = null;
+      let resolveFailed = false;
       if (d.change_type === 'rewrite_run' && Number.isInteger(d.run_index)) {
         const runMarkup = resolveRun(d.target_section, d.run_index);
         if (runMarkup) { contentBefore = runMarkup; server_resolved_count++; }
+        else resolveFailed = true; // target_section が見出しでない / run_index 不正 → 適用不能
       }
       const g = gated[idx] || {};
       // 出典ゲート結果を rationale に記録し、held は confidence='low' で自動承認から外す。
@@ -260,7 +262,10 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
         dropped: g.dropped || [],
         hold_reasons: g.holdReasons || [],
       };
-      const confidence = g.hold ? 'low' : d.llm_confidence;
+      // rewrite_run で run 解決不能 = 永久に適用できない壊れ diff。low にして自動承認から外し、
+      // rationale にフラグを残す (承認済みなのに適用されない stuck を防ぐ。securities/4054 で発覚)。
+      if (resolveFailed) rationale.resolve_failed = true;
+      const confidence = (g.hold || resolveFailed) ? 'low' : d.llm_confidence;
       if (g.hold) citation_held++;
       insertDiff.run(
         session_id,

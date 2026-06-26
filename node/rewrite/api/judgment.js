@@ -165,8 +165,13 @@ function wpAuthHeader() {
 }
 
 // content.raw (Gutenberg block markup) を取得。edit 権限が要る (soico-cvr-system / editor)。
+// cache-bust + no-cache: CF APO 等の GET 層キャッシュが古い raw を返す事故を防ぐ (2026-06-26)。
+// modified を併せて返し、適用直前の楽観ロック照合に使う。
 async function fetchWpPost(postId) {
-  const res = await fetch(`${wpBase()}/posts/${postId}?context=edit`, { headers: { Authorization: wpAuthHeader() } });
+  const cb = Date.now();
+  const res = await fetch(`${wpBase()}/posts/${postId}?context=edit&_cb=${cb}`, {
+    headers: { Authorization: wpAuthHeader(), 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+  });
   if (!res.ok) {
     throw new Error(`WP fetch ${postId}: HTTP ${res.status} (context=edit 権限/認証を確認)`);
   }
@@ -175,7 +180,22 @@ async function fetchWpPost(postId) {
   if (content_raw == null) {
     throw new Error(`WP post ${postId}: content.raw 取得不可 (edit 権限不足の可能性)`);
   }
-  return { title_raw: p.title?.raw ?? p.title?.rendered ?? '', content_raw };
+  return { title_raw: p.title?.raw ?? p.title?.rendered ?? '', content_raw, modified_gmt: p.modified_gmt ?? p.modified ?? null };
+}
+
+// 適用直前の楽観ロック: fetch 時点の modified_gmt と現在を照合。差異あれば true (= 別更新が入った)。
+async function wpPostChangedSince(postId, modifiedGmt) {
+  if (!modifiedGmt) return false; // 取得不可なら照合スキップ (従来挙動)
+  try {
+    const cb = Date.now();
+    const res = await fetch(`${wpBase()}/posts/${postId}?context=edit&_fields=modified_gmt&_cb=${cb}`, {
+      headers: { Authorization: wpAuthHeader(), 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+    });
+    if (!res.ok) return false;
+    const p = await res.json();
+    const now = p.modified_gmt ?? null;
+    return now != null && now !== modifiedGmt;
+  } catch { return false; }
 }
 
 // payload: { content?, title? } を WP に PUT。
@@ -790,6 +810,14 @@ async function applySessionCore(id, { dryRun = false } = {}) {
     console.warn(`[applySessionCore] session ${id} post ${session.post_id}: 空BOX残存 ${emptyBoxesRemaining.length}件 → ${emptyBoxesRemaining.join(' / ')}`);
     skipped.push({ diff_id: null, reason: `⚠空BOX残存(${emptyBoxesRemaining.length}): ${emptyBoxesRemaining.join(' / ')} — 補完されず公開。要確認` });
   }
+  // 楽観ロック: fetch から書込までの間に別更新(手動編集/別セッション)が入っていたら中断。
+  // stale read に基づく上書きで他者変更を巻き戻す事故を防ぐ (2026-06-26 stale調査の対策)。
+  if (await wpPostChangedSince(session.post_id, wp.modified_gmt)) {
+    const e = new Error(`apply中断: post ${session.post_id} が取得後に変更された (楽観ロック)。再実行してください`);
+    e.httpStatus = 409;
+    throw e;
+  }
+
   conn.prepare(
     `UPDATE master_rewrite_session
      SET wp_snapshot_before_apply=?, wp_apply_started_at=CURRENT_TIMESTAMP
