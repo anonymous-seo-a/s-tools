@@ -192,6 +192,18 @@ export const api = {
   // 効果測定 (適用前後の順位比較、読み取り専用)
   getRewriteMeasurement: () => request('/api/rewrite/measurement'),
 
+  // クリック分析 (台帳直結ライブ: 記事 × リンク × クリック数 × ユニーク)
+  getAffClicks: ({ start, end, post_id, advertiser, limit } = {}) => {
+    const qs = new URLSearchParams();
+    if (start) qs.set('start', start);
+    if (end) qs.set('end', end);
+    if (post_id) qs.set('post_id', post_id);
+    if (advertiser) qs.set('advertiser', advertiser);
+    if (limit) qs.set('limit', limit);
+    const q = qs.toString();
+    return request(`/api/rewrite/aff-clicks/breakdown${q ? `?${q}` : ''}`);
+  },
+
   // β-2: WP 適用 (dry-run / 本適用 / ロールバック)
   applySession: (sessionId, { dryRun = false } = {}) =>
     request(`/api/rewrite/judgment/sessions/${sessionId}/apply`, {

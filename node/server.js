@@ -16,6 +16,7 @@ const mastersRoutes = require('./masters-routes');
 const rewriteQueueApi = require('./rewrite/api/queue');
 const rewriteJudgmentApi = require('./rewrite/api/judgment');
 const rewriteMeasurementApi = require('./rewrite/api/measurement');
+const rewriteAffClicksApi = require('./rewrite/api/aff-clicks');
 const cron = require('node-cron');
 
 const app = express();
@@ -34,6 +35,7 @@ app.use('/api/masters', mastersRoutes);
 // リライトシステム API（Phase 4）
 app.use('/api/rewrite/judgment', rewriteJudgmentApi.buildRouter());
 app.use('/api/rewrite/measurement', rewriteMeasurementApi.buildRouter());
+app.use('/api/rewrite/aff-clicks', rewriteAffClicksApi.buildRouter());
 app.use('/api/rewrite', rewriteQueueApi.buildRouter());
 
 // ============================================================

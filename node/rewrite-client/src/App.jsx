@@ -5,6 +5,7 @@ import MastersView from './masters/MastersView';
 import RewriteQueueView from './RewriteQueueView';
 import RewriteJudgmentView from './RewriteJudgmentView';
 import MeasurementView from './MeasurementView';
+import ClickAnalysisView from './ClickAnalysisView';
 
 function Toast({ message, type, onClose }) {
   // エラーは自動消滅させない (500 本文など長文を読み切れるように)。クリックで閉じる。
@@ -65,6 +66,7 @@ const TABS = [
   { key: 'rewrite-judgment', label: '判定' },
   { key: 'rewrite-queue',    label: '対象選定' },
   { key: 'measurement',      label: '効果測定' },
+  { key: 'click-analysis',   label: 'クリック分析' },
   { key: 'monitor',          label: '順位モニタリング' },
   { key: 'masters',          label: 'マスター' },
 ];
@@ -97,6 +99,7 @@ export default function App() {
         {page === 'rewrite-judgment' && <RewriteJudgmentView showToast={showToast} />}
         {page === 'rewrite-queue'    && <RewriteQueueView showToast={showToast} />}
         {page === 'measurement'      && <MeasurementView showToast={showToast} />}
+        {page === 'click-analysis'   && <ClickAnalysisView showToast={showToast} />}
         {page === 'monitor'          && <MonitorView showToast={showToast} />}
         {page === 'masters'          && <MastersView showToast={showToast} />}
       </div>
