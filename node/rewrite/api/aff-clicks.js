@@ -6,6 +6,24 @@
 
 const express = require('express');
 const config = require('../../config');
+const { open } = require('../db');
+
+// 指定記事のリライト適用日(JST)を rewrite.db から取得。時系列トレンドの施策マーカー用。
+function applyMarkersForPost(postId) {
+  try {
+    const conn = open();
+    const rows = conn.prepare(`
+      SELECT date(wp_apply_completed_at, '+9 hours') AS d
+      FROM master_rewrite_session
+      WHERE post_id = ? AND wp_apply_completed_at IS NOT NULL
+      ORDER BY wp_apply_completed_at
+    `).all(postId);
+    return rows.map((r) => r.d);
+  } catch (e) {
+    console.warn('[aff-clicks] apply markers skip:', e.message);
+    return [];
+  }
+}
 
 function wpRoot() {
   const b = process.env.WP_API_BASE_URL || config.site.url || '';
@@ -34,6 +52,9 @@ function buildRouter() {
         return res.status(502).json({ error: `WP ${r.status}`, detail: body.slice(0, 300) });
       }
       const json = await r.json();
+      // 単一記事に絞り込み中なら、その記事のリライト適用日を施策マーカーとして同梱。
+      const postId = parseInt(req.query.post_id, 10);
+      json.apply_markers = postId > 0 ? applyMarkersForPost(postId) : [];
       return res.json(json);
     } catch (e) {
       console.error('[GET /rewrite/aff-clicks/breakdown]', e);

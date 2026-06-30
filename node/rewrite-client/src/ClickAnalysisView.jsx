@@ -31,27 +31,73 @@ function fmtTime(s) {
   return d === todayISO() ? hm : `${d.slice(5)} ${hm}`;
 }
 
-// detail 行を pivot に応じて集約。
-function aggregate(rows, pivot) {
+// detail 行を pivot に応じて集約。ユニークは行 users 合算だと重複過大になるため、
+// サーバが返す厳密値(users_by_post / users_by_advertiser)を当てる。
+function aggregate(rows, pivot, data) {
   if (pivot === 'detail') return rows;
+  const usersMap = pivot === 'article' ? (data?.users_by_post || {}) : (data?.users_by_advertiser || {});
   const key = pivot === 'article' ? (r) => r.post_id : (r) => r.advertiser;
   const map = new Map();
   for (const r of rows) {
     const k = key(r);
     const g = map.get(k) || {
       post_id: r.post_id, post_title: r.post_title, post_url: r.post_url,
-      advertiser: r.advertiser, clicks: 0, users: 0, _userMax: 0,
-      variants: 0, last_click: '',
+      advertiser: r.advertiser, clicks: 0, users: null, variants: 0, last_click: '',
     };
     g.clicks += r.clicks;
-    // ユニークは行集約では厳密に足せない(重複ユーザ)。近似: 同一グループ内の最大行ユニークを下限、合計を上限。
-    // 表示は「合計クリック」主軸とし、users は detail のみ厳密。集約では参考値(行users合計)。
-    g.users += r.users;
     g.variants += 1;
     if (r.last_click > g.last_click) g.last_click = r.last_click;
     map.set(k, g);
   }
+  for (const g of map.values()) {
+    const mk = pivot === 'article' ? String(g.post_id) : g.advertiser;
+    g.users = usersMap[mk] ?? null;
+  }
   return [...map.values()].sort((a, b) => b.clicks - a.clicks);
+}
+
+// 時系列トレンド: クリック数バー + リライト適用日(赤線)。単日=時間別、複数日=日次。
+function Trend({ series, bucket, markers }) {
+  if (!series || series.length < 2) return null;
+  const w = 680, h = 96, padL = 28, padR = 8, padT = 10, padB = 18;
+  const n = series.length;
+  const max = Math.max(...series.map((p) => p.clicks), 1);
+  const bw = (w - padL - padR) / n;
+  const xOf = (i) => padL + i * bw;
+  const yOf = (v) => padT + (1 - v / max) * (h - padT - padB);
+  const label = (t) => (bucket === 'hour' ? t.slice(11, 13) + '時' : t.slice(5));
+  const step = Math.ceil(n / 12);
+  return (
+    <div className="meas-table-wrap" style={{ marginBottom: 12 }}>
+      <svg width={w} height={h} style={{ maxWidth: '100%' }}>
+        <line x1={padL} y1={yOf(max)} x2={w - padR} y2={yOf(max)} stroke="#eee" />
+        <text x={2} y={yOf(max) + 4} fontSize="9" fill="#999">{max}</text>
+        <line x1={padL} y1={yOf(0)} x2={w - padR} y2={yOf(0)} stroke="#ccc" />
+        {series.map((p, i) => (
+          <rect key={i} x={xOf(i) + 1} y={yOf(p.clicks)} width={Math.max(bw - 2, 1)}
+            height={yOf(0) - yOf(p.clicks)} fill="#1565c0" rx="1">
+            <title>{p.t}: {p.clicks}クリック / {p.users}ユニーク</title>
+          </rect>
+        ))}
+        {series.map((p, i) => (i % step === 0
+          ? <text key={`l${i}`} x={xOf(i) + bw / 2} y={h - 5} fontSize="9" fill="#999" textAnchor="middle">{label(p.t)}</text>
+          : null))}
+        {(markers || []).map((d, k) => {
+          const idx = series.findIndex((p) => p.t.slice(0, 10) === d);
+          if (idx < 0) return null;
+          const x = xOf(idx) + bw / 2;
+          return <g key={`m${k}`}>
+            <line x1={x} y1={padT} x2={x} y2={yOf(0)} stroke="#c62828" strokeWidth="1.5" />
+            <title>リライト適用: {d}</title>
+          </g>;
+        })}
+      </svg>
+      <div style={{ fontSize: 11, color: '#888', padding: '2px 8px' }}>
+        ■クリック数 / {bucket === 'hour' ? '時間別' : '日次'}
+        {markers && markers.length > 0 && <span style={{ color: '#c62828' }}> ｜ 赤線=リライト適用日</span>}
+      </div>
+    </div>
+  );
 }
 
 function StatCards({ totals, serverTime, rowCount }) {
@@ -100,7 +146,7 @@ export default function ClickAnalysisView({ showToast }) {
   }, [auto, end, load]);
 
   const rows = data?.rows || [];
-  const view = useMemo(() => aggregate(rows, pivot), [rows, pivot]);
+  const view = useMemo(() => aggregate(rows, pivot, data), [rows, pivot, data]);
 
   const preset = (days) => {
     const e = todayISO();
@@ -162,6 +208,8 @@ export default function ClickAnalysisView({ showToast }) {
 
       <StatCards totals={data?.totals} serverTime={data?.server_time} rowCount={rows.length} />
 
+      {data && <Trend series={data.series} bucket={data.bucket} markers={data.apply_markers} />}
+
       {loading && !data && <div className="loading"><div className="spinner" /> 読み込み中...</div>}
 
       {data && view.length === 0 && (
@@ -188,7 +236,7 @@ export default function ClickAnalysisView({ showToast }) {
                   <th className="meas-th-article">記事</th>
                   <th>リンク数</th>
                   <th>クリック</th>
-                  <th>ユニーク(参考)</th>
+                  <th>ユニーク</th>
                   <th>最終</th>
                 </tr>
               )}
@@ -197,7 +245,7 @@ export default function ClickAnalysisView({ showToast }) {
                   <th>リンク(商材)</th>
                   <th>記事数</th>
                   <th>クリック</th>
-                  <th>ユニーク(参考)</th>
+                  <th>ユニーク</th>
                   <th>最終</th>
                 </tr>
               )}
