@@ -203,6 +203,11 @@ export const api = {
     const q = qs.toString();
     return request(`/api/rewrite/aff-clicks/breakdown${q ? `?${q}` : ''}`);
   },
+  importConversions: ({ asp, csv, mapping }) =>
+    request('/api/rewrite/aff-clicks/conversions/import', {
+      method: 'POST',
+      body: JSON.stringify({ asp, csv, mapping }),
+    }),
 
   // β-2: WP 適用 (dry-run / 本適用 / ロールバック)
   applySession: (sessionId, { dryRun = false } = {}) =>

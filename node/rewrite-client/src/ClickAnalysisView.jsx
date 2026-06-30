@@ -42,9 +42,11 @@ function aggregate(rows, pivot, data) {
     const k = key(r);
     const g = map.get(k) || {
       post_id: r.post_id, post_title: r.post_title, post_url: r.post_url,
-      advertiser: r.advertiser, clicks: 0, users: null, variants: 0, last_click: '',
+      advertiser: r.advertiser, clicks: 0, users: null, cv: 0, reward: 0, variants: 0, last_click: '',
     };
     g.clicks += r.clicks;
+    g.cv += r.cv || 0;
+    g.reward += r.reward || 0;
     g.variants += 1;
     if (r.last_click > g.last_click) g.last_click = r.last_click;
     map.set(k, g);
@@ -108,7 +110,83 @@ function StatCards({ totals, serverTime, rowCount }) {
       <div className="stat-card"><div className="number">{totals.users}</div><div className="label">ユニークユーザ</div></div>
       <div className="stat-card"><div className="number">{totals.posts}</div><div className="label">記事数</div></div>
       <div className="stat-card"><div className="number">{totals.advertisers}</div><div className="label">リンク(商材)数</div></div>
+      {totals.cv > 0 && <div className="stat-card"><div className="number meas-num-up">{totals.cv}</div><div className="label">成果CV</div></div>}
+      {totals.reward > 0 && <div className="stat-card"><div className="number meas-num-up">¥{Math.round(totals.reward).toLocaleString()}</div><div className="label">報酬</div></div>}
       <div className="stat-card"><div className="number" style={{ fontSize: 13 }}>{fmtTime(serverTime)}</div><div className="label">最終取得 ({rowCount}行)</div></div>
+    </div>
+  );
+}
+
+// ASP 成果CSV取込パネル。列マッピング(subid 必須)で書式非依存に正規化して送信。
+function ConversionImport({ showToast, onDone }) {
+  const [open, setOpen] = useState(false);
+  const [asp, setAsp] = useState('');
+  const [csv, setCsv] = useState('');
+  const [headers, setHeaders] = useState([]);
+  const [map, setMap] = useState({ subid: '', reward: '', status: '', order_id: '', occurred_at: '' });
+  const [busy, setBusy] = useState(false);
+
+  const onFile = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const text = await f.text();
+    setCsv(text);
+    const firstLine = text.replace(/\r\n/g, '\n').split('\n')[0] || '';
+    // ヘッダ推定（引用符無し前提の簡易。サーバ側で厳密パース）。
+    const hs = firstLine.split(',').map((h) => h.replace(/^"|"$/g, '').trim());
+    setHeaders(hs);
+    // subid 列を名前から自動推測。
+    const guess = hs.find((h) => /sub|click|id1|rk|args|param/i.test(h)) || '';
+    setMap((m) => ({ ...m, subid: guess }));
+  };
+
+  const run = async () => {
+    if (!asp || !map.subid) { showToast('ASP名 と subid列 は必須', 'error'); return; }
+    setBusy(true);
+    try {
+      const r = await api.importConversions({ asp, csv, mapping: map });
+      showToast(`取込: ${r.inserted}件 / 既存${r.skipped} / クリック突合${r.matched_to_click}件`);
+      onDone?.();
+    } catch (e) { showToast(e.message, 'error'); }
+    setBusy(false);
+  };
+
+  const sel = (field, label, required) => (
+    <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span>{label}{required && <span style={{ color: '#c62828' }}>*</span>}</span>
+      <select value={map[field]} onChange={(e) => setMap((m) => ({ ...m, [field]: e.target.value }))}>
+        <option value="">—</option>
+        {headers.map((h) => <option key={h} value={h}>{h}</option>)}
+      </select>
+    </label>
+  );
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <button className="btn-tiny" onClick={() => setOpen((v) => !v)}>{open ? '▼' : '▶'} ASP成果CSV取込</button>
+      {open && (
+        <div className="meas-table-wrap" style={{ padding: 12, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+          <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span>ASP名<span style={{ color: '#c62828' }}>*</span></span>
+            <input value={asp} onChange={(e) => setAsp(e.target.value)} placeholder="afb / 82comb ..." style={{ width: 120 }} />
+          </label>
+          <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span>CSVファイル</span>
+            <input type="file" accept=".csv,text/csv" onChange={onFile} />
+          </label>
+          {headers.length > 0 && <>
+            {sel('subid', 'subid列(=click_id)', true)}
+            {sel('reward', '報酬列')}
+            {sel('status', 'ステータス列')}
+            {sel('order_id', '注文ID列')}
+            {sel('occurred_at', '発生日時列')}
+          </>}
+          <button className="btn-secondary btn-small" onClick={run} disabled={busy || !csv}>{busy ? '取込中...' : '取込実行'}</button>
+          <div style={{ flexBasis: '100%', fontSize: 11, color: '#888' }}>
+            subid列 = ASP成果に返るサブID（台帳 click_id と一致）。突合0件なら subID注入未反映 or 列違い。
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -156,15 +234,15 @@ export default function ClickAnalysisView({ showToast }) {
 
   const exportCsv = () => {
     const head = pivot === 'detail'
-      ? ['post_id', 'article', 'advertiser', 'dest_host', 'clicks', 'users', 'last_click', 'url']
+      ? ['post_id', 'article', 'advertiser', 'dest_host', 'clicks', 'users', 'cv', 'reward', 'last_click', 'url']
       : pivot === 'article'
-        ? ['post_id', 'article', 'links', 'clicks', 'users', 'last_click', 'url']
-        : ['advertiser', 'articles', 'clicks', 'users', 'last_click'];
+        ? ['post_id', 'article', 'links', 'clicks', 'users', 'cv', 'reward', 'last_click', 'url']
+        : ['advertiser', 'articles', 'clicks', 'users', 'cv', 'reward', 'last_click'];
     const line = (r) => pivot === 'detail'
-      ? [r.post_id, r.post_title, r.advertiser, r.dest_host, r.clicks, r.users, r.last_click, r.post_url]
+      ? [r.post_id, r.post_title, r.advertiser, r.dest_host, r.clicks, r.users, r.cv, r.reward, r.last_click, r.post_url]
       : pivot === 'article'
-        ? [r.post_id, r.post_title, r.variants, r.clicks, r.users, r.last_click, r.post_url]
-        : [r.advertiser, r.variants, r.clicks, r.users, r.last_click];
+        ? [r.post_id, r.post_title, r.variants, r.clicks, r.users, r.cv, r.reward, r.last_click, r.post_url]
+        : [r.advertiser, r.variants, r.clicks, r.users, r.cv, r.reward, r.last_click];
     const csv = [head, ...view.map(line)]
       .map((cols) => cols.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
       .join('\n');
@@ -206,6 +284,8 @@ export default function ClickAnalysisView({ showToast }) {
         </div>
       )}
 
+      <ConversionImport showToast={showToast} onDone={() => load()} />
+
       <StatCards totals={data?.totals} serverTime={data?.server_time} rowCount={rows.length} />
 
       {data && <Trend series={data.series} bucket={data.bucket} markers={data.apply_markers} />}
@@ -228,6 +308,8 @@ export default function ClickAnalysisView({ showToast }) {
                   <th>クリック</th>
                   <th>ユニーク</th>
                   <th>回/人</th>
+                  <th>CV</th>
+                  <th>報酬</th>
                   <th>最終</th>
                 </tr>
               )}
@@ -237,6 +319,8 @@ export default function ClickAnalysisView({ showToast }) {
                   <th>リンク数</th>
                   <th>クリック</th>
                   <th>ユニーク</th>
+                  <th>CV</th>
+                  <th>報酬</th>
                   <th>最終</th>
                 </tr>
               )}
@@ -246,6 +330,8 @@ export default function ClickAnalysisView({ showToast }) {
                   <th>記事数</th>
                   <th>クリック</th>
                   <th>ユニーク</th>
+                  <th>CV</th>
+                  <th>報酬</th>
                   <th>最終</th>
                 </tr>
               )}
@@ -272,6 +358,8 @@ export default function ClickAnalysisView({ showToast }) {
                     <td style={{ textAlign: 'right', color: r.users && r.clicks / r.users >= 2 ? '#c62828' : '#555' }}>
                       {r.users ? (r.clicks / r.users).toFixed(1) : '—'}
                     </td>
+                    <td style={{ textAlign: 'right', fontWeight: r.cv ? 700 : 400, color: r.cv ? '#2e7d32' : '#bbb' }}>{r.cv || '—'}</td>
+                    <td style={{ textAlign: 'right', color: r.reward ? '#2e7d32' : '#bbb' }}>{r.reward ? `¥${Math.round(r.reward).toLocaleString()}` : '—'}</td>
                     <td style={{ fontSize: 11 }}>{fmtTime(r.last_click)}</td>
                   </>}
                   {pivot === 'article' && <>
@@ -284,6 +372,8 @@ export default function ClickAnalysisView({ showToast }) {
                     <td style={{ textAlign: 'right' }}>{r.variants}</td>
                     <td style={{ fontWeight: 700, textAlign: 'right' }}>{r.clicks}</td>
                     <td style={{ textAlign: 'right' }}>{r.users}</td>
+                    <td style={{ textAlign: 'right', fontWeight: r.cv ? 700 : 400, color: r.cv ? '#2e7d32' : '#bbb' }}>{r.cv || '—'}</td>
+                    <td style={{ textAlign: 'right', color: r.reward ? '#2e7d32' : '#bbb' }}>{r.reward ? `¥${Math.round(r.reward).toLocaleString()}` : '—'}</td>
                     <td style={{ fontSize: 11 }}>{fmtTime(r.last_click)}</td>
                   </>}
                   {pivot === 'link' && <>
@@ -291,6 +381,8 @@ export default function ClickAnalysisView({ showToast }) {
                     <td style={{ textAlign: 'right' }}>{r.variants}</td>
                     <td style={{ fontWeight: 700, textAlign: 'right' }}>{r.clicks}</td>
                     <td style={{ textAlign: 'right' }}>{r.users}</td>
+                    <td style={{ textAlign: 'right', fontWeight: r.cv ? 700 : 400, color: r.cv ? '#2e7d32' : '#bbb' }}>{r.cv || '—'}</td>
+                    <td style={{ textAlign: 'right', color: r.reward ? '#2e7d32' : '#bbb' }}>{r.reward ? `¥${Math.round(r.reward).toLocaleString()}` : '—'}</td>
                     <td style={{ fontSize: 11 }}>{fmtTime(r.last_click)}</td>
                   </>}
                 </tr>
