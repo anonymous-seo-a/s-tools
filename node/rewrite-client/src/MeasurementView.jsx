@@ -53,6 +53,32 @@ function DeltaCell({ delta, digits = 1 }) {
   );
 }
 
+// 地合い変動が計測窓に重複したとき = この Δ は汚染されている可能性。
+// 健全 (high/null) では何も出さない（汚染された Δ にだけ警告する＝最小性）。
+function ConfidenceBadge({ confidence, confounding }) {
+  if (!confidence || confidence === 'high') return null;
+  const c = confounding || {};
+  const dates = (c.shift_dates || []).map((d) => d.slice(5)).join(', ');
+  const label = confidence === 'low' ? '地合い大' : '地合い';
+  const color = confidence === 'low' ? '#c62828' : '#f57f17';
+  const title =
+    `地合い変動 ${c.post_shift_days || 0}日が計測窓に重複` +
+    (dates ? `（${dates}）` : '') +
+    (c.post_gap_days ? ` / 計測欠損${c.post_gap_days}日` : '') +
+    ' — このΔは割引いて解釈';
+  return (
+    <span
+      title={title}
+      style={{
+        display: 'inline-block', marginTop: 3, fontSize: 10, lineHeight: '14px',
+        padding: '0 5px', borderRadius: 7, color: '#fff', background: color, whiteSpace: 'nowrap',
+      }}
+    >
+      ⚠ {label}
+    </span>
+  );
+}
+
 function RankPair({ before, after, waiting, digits = 1 }) {
   return (
     <span className="meas-rankpair">
@@ -163,7 +189,10 @@ export default function MeasurementView({ showToast }) {
                     <RankPair before={it.rank_before} after={it.rank_after} waiting={it.days_after === 0} />
                     <span className="meas-days">{it.days_after > 0 ? `${it.days_after}日計測` : ''}</span>
                   </td>
-                  <td className="meas-deltacell"><DeltaCell delta={it.rank_delta} /></td>
+                  <td className="meas-deltacell">
+                    <DeltaCell delta={it.rank_delta} />
+                    <ConfidenceBadge confidence={it.measurement_confidence} confounding={it.confounding} />
+                  </td>
                   <td className="meas-rank">
                     <RankPair before={it.yahoo_before} after={it.yahoo_after} waiting={false} />
                     <span className="meas-days">{it.yahoo_days_after > 0 ? `${it.yahoo_days_after}日計測` : ''}</span>

@@ -5,9 +5,34 @@
 // 新規収集・新規保存なし: 読み取り時に rewrite.db × monitor.db を join して計算。
 
 const express = require('express');
+const fs = require('fs');
 const { open } = require('../db');
 
 const PRE_WINDOW_DAYS = 28; // 候補選定 (rewrite-candidates) と同じ観測窓
+
+// 地合い変動シグナル (seo-signals リポジトリが所有する signals.db, Read-Only)。
+// 無ければ graceful skip = この連携が無かった時と完全に同一動作。
+// パスは自己探索（env → 本番VPS → ローカル開発）。env 注入に依存せず auto-deploy に強い。
+const SIGNALS_DB_CANDIDATES = [
+  process.env.SIGNALS_DB,
+  '/opt/seo-signals/db/signals.db',                        // 本番 VPS
+  '/Users/daikinozawa/Projects/seo-signals/db/signals.db', // ローカル開発
+].filter(Boolean);
+let _sigConn; // undefined=未試行 / null=不在 / Database=接続
+function getSignalsDB() {
+  if (_sigConn !== undefined) return _sigConn;
+  _sigConn = null;
+  try {
+    const p = SIGNALS_DB_CANDIDATES.find((x) => fs.existsSync(x));
+    if (!p) return _sigConn;
+    const Database = require('better-sqlite3');
+    _sigConn = new Database(p, { readonly: true, fileMustExist: true });
+  } catch (e) {
+    console.warn('[measurement] signals.db 接続不可、交絡補正をskip:', e.message);
+    _sigConn = null;
+  }
+  return _sigConn;
+}
 
 function buildRouter() {
   const router = express.Router();
@@ -77,6 +102,28 @@ function buildRouter() {
       `);
       const dateAdd = m.prepare('SELECT date(?, ?) AS d');
 
+      // 交絡 (地合い変動) シグナルを scope別に一括ロード。無ければ null = graceful skip。
+      let shiftByScope = null; // Map: scope -> Set(date)
+      let gapDates = null;     // Set(date)（measurement_gap, scope=global）
+      const sig = getSignalsDB();
+      if (sig) {
+        try {
+          const srows = sig.prepare(
+            "SELECT date, scope, type FROM daily_shift WHERE type IN ('market_shift','measurement_gap')"
+          ).all();
+          shiftByScope = new Map();
+          gapDates = new Set();
+          for (const r of srows) {
+            if (r.type === 'measurement_gap') { gapDates.add(r.date); continue; }
+            if (!shiftByScope.has(r.scope)) shiftByScope.set(r.scope, new Set());
+            shiftByScope.get(r.scope).add(r.date);
+          }
+        } catch (e) {
+          console.warn('[measurement] daily_shift 読込失敗、交絡補正をskip:', e.message);
+          shiftByScope = null; gapDates = null;
+        }
+      }
+
       const items = sessions.map((s) => {
         const art = artStmt.get(s.post_id) || {};
         const preStart = dateAdd.get(s.applied_date, `-${PRE_WINDOW_DAYS} day`).d;
@@ -102,6 +149,34 @@ function buildRouter() {
         const affPerDayAfter = perDay(affSumAfter, affAfter.days);
         const affCtrBefore = ctr(affSumBefore, affBefore.sumImpr || 0);
         const affCtrAfter = ctr(affSumAfter, affAfter.sumImpr || 0);
+
+        // 交絡 (地合い変動) による効果測定の信頼度。canon: market_shift→confidence割引 / gap→除外。
+        // 既存の数値フィールドは一切変えない純粋加算（rank_delta 自体は補正しない=v1射程）。
+        let measurementConfidence = null;
+        let confounding = null;
+        if (shiftByScope) {
+          const windowEnd = latest || s.applied_date;
+          const inWindow = (d) => d >= postStart && d <= windowEnd;
+          const globalSet = shiftByScope.get('global') || new Set();
+          const genreSet = shiftByScope.get(s.genre) || new Set();
+          const seen = new Set();
+          const shiftDates = [];
+          for (const set of [globalSet, genreSet]) {
+            for (const d of set) if (inWindow(d) && !seen.has(d)) { seen.add(d); shiftDates.push(d); }
+          }
+          shiftDates.sort();
+          const gapInWindow = gapDates ? [...gapDates].filter(inWindow).sort() : [];
+          const daysAfter = after.days || 0;
+          const ratio = daysAfter > 0 ? shiftDates.length / daysAfter : null;
+          measurementConfidence = ratio == null ? null
+            : ratio < 0.2 ? 'high' : ratio < 0.5 ? 'medium' : 'low';
+          confounding = {
+            post_shift_days: shiftDates.length,
+            post_gap_days: gapInWindow.length,
+            shift_dates: shiftDates,
+            gap_dates: gapInWindow,
+          };
+        }
         return {
           session_id: s.session_id,
           post_id: s.post_id,
@@ -138,6 +213,9 @@ function buildRouter() {
           series: seriesStmt.all(s.post_id, preStart),
           yahoo_series: yahooSeriesStmt.all(s.post_id, preStart),
           aff_series: affSeriesStmt.all(s.post_id, preStart),
+          // 地合い変動による効果測定の信頼度（signals.db 連携。null=signals不在）
+          measurement_confidence: measurementConfidence,
+          confounding,
         };
       });
 
