@@ -46,7 +46,7 @@ async function collectRange(startDate, endDate) {
     });
   }
 
-  // 2) GA4 PV / 3) GA4 affiliate_click — GA4 設定不備(API未有効化/プロパティ未許可)で失敗しても
+  // 2) GA4 PV — GA4 設定不備(API未有効化/プロパティ未許可)で失敗しても
   // GSC データ(rank/impression)の収集は止めない。GA4 分は埋まらないだけにする。
   let ga4_ok = true;
   let ga4_error = null;
@@ -58,17 +58,41 @@ async function collectRange(startDate, endDate) {
       rec.pv = r.pv;
       metricsMap.set(key, rec);
     }
-    const affData = await col.fetchGa4AffiliateClicks(startDate, endDate);
-    for (const r of affData) {
+  } catch (e) {
+    ga4_ok = false;
+    ga4_error = (e.message || String(e)).slice(0, 120);
+    console.warn(`[monitor] GA4 PV 取得失敗 (GSC は継続): ${ga4_error}`);
+  }
+
+  // 3) affiliate_click — 台帳直結(wp_soico_aff_clicks=真実の源)を優先。
+  //    GA4 経由は DEBUG(shadow)/サンプリング/pageLocation 寄せ不全の影響を受けるため fallback に降格。
+  let affByPartnerRows = [];
+  let aff_source = 'ledger';
+  try {
+    const led = await col.fetchLedgerAffiliateClicks(startDate, endDate);
+    for (const r of led.daily) {
       const key = `${r.post_id}|${r.date}`;
       const rec = metricsMap.get(key) || { post_id: r.post_id, date: r.date };
       rec.aff_click = r.aff_click;
       metricsMap.set(key, rec);
     }
-  } catch (e) {
-    ga4_ok = false;
-    ga4_error = (e.message || String(e)).slice(0, 120);
-    console.warn(`[monitor] GA4 取得失敗 (GSC は継続): ${ga4_error}`);
+    affByPartnerRows = led.byPartner;
+  } catch (eLedger) {
+    aff_source = 'ga4_fallback';
+    console.warn(`[monitor] 台帳 aff-clicks 取得失敗 → GA4 fallback: ${eLedger.message}`);
+    try {
+      const affData = await col.fetchGa4AffiliateClicks(startDate, endDate);
+      for (const r of affData) {
+        const key = `${r.post_id}|${r.date}`;
+        const rec = metricsMap.get(key) || { post_id: r.post_id, date: r.date };
+        rec.aff_click = r.aff_click;
+        metricsMap.set(key, rec);
+      }
+      affByPartnerRows = await col.fetchGa4AffiliateClicksByPartner(startDate, endDate);
+    } catch (eGa4) {
+      aff_source = 'none';
+      console.warn(`[monitor] GA4 aff fallback も失敗: ${eGa4.message}`);
+    }
   }
 
   const records = [...metricsMap.values()];
@@ -98,18 +122,17 @@ async function collectRange(startDate, endDate) {
   }));
   const inserted = db.bulkUpsertDailyMetrics(toInsert);
 
-  // 6) 商材別アフィリクリック（失敗してもメインは継続）
+  // 6) 商材別アフィリクリック（3) で取得済の台帳/fallback 行をそのまま upsert）
   let affPartnerInserted = 0;
   try {
-    const byPartner = await col.fetchGa4AffiliateClicksByPartner(startDate, endDate);
-    if (byPartner.length > 0) {
-      affPartnerInserted = db.bulkUpsertAffiliateClicks(byPartner);
+    if (affByPartnerRows.length > 0) {
+      affPartnerInserted = db.bulkUpsertAffiliateClicks(affByPartnerRows);
     }
   } catch (e) {
-    console.warn(`[monitor] affiliate_click_by_partner failed (custom dim 'link_url' 未登録の可能性): ${e.message}`);
+    console.warn(`[monitor] affiliate_click_by_partner upsert failed: ${e.message}`);
   }
 
-  return { metrics: inserted, articles: seenArticles.size, affByPartner: affPartnerInserted, ga4_ok, ga4_error };
+  return { metrics: inserted, articles: seenArticles.size, affByPartner: affPartnerInserted, aff_source, ga4_ok, ga4_error };
 }
 
 // ============================================================

@@ -42,24 +42,24 @@ function Sparkline({ series, yahooSeries, appliedDate }) {
   );
 }
 
-function DeltaCell({ delta }) {
+function DeltaCell({ delta, digits = 1 }) {
   if (delta == null) return <span className="meas-muted">—</span>;
   const improved = delta > 0;
   const flat = delta === 0;
   return (
     <span className={`meas-delta ${flat ? 'flat' : improved ? 'up' : 'down'}`}>
-      {improved ? '↑' : flat ? '→' : '↓'} {Math.abs(delta).toFixed(1)}
+      {improved ? '↑' : flat ? '→' : '↓'} {Math.abs(delta).toFixed(digits)}
     </span>
   );
 }
 
-function RankPair({ before, after, waiting }) {
+function RankPair({ before, after, waiting, digits = 1 }) {
   return (
     <span className="meas-rankpair">
-      <span className="meas-before">{before != null ? before.toFixed(1) : '—'}</span>
+      <span className="meas-before">{before != null ? before.toFixed(digits) : '—'}</span>
       <span className="meas-arrow">→</span>
       {after != null
-        ? <span className="meas-after">{after.toFixed(1)}</span>
+        ? <span className="meas-after">{after.toFixed(digits)}</span>
         : waiting
           ? <span className="meas-waiting">確定待ち</span>
           : <span className="meas-muted">—</span>}
@@ -129,6 +129,7 @@ export default function MeasurementView({ showToast }) {
                 <th rowSpan={2}>適用日</th>
                 <th colSpan={2}>GSC 確定 (前28d → 後)</th>
                 <th colSpan={2}>Yahoo 速報 (前28d → 後)</th>
+                <th colSpan={2} title="台帳直結。記事→アフィリンクのクリック=収益アクション。多いほど良い。">afクリック/日 (前28d → 後)</th>
                 <th rowSpan={2} className="meas-th-spark">
                   推移 <span className="meas-legend"><i className="lg-gsc">―GSC</i> <i className="lg-yahoo">--Yahoo</i></span>
                 </th>
@@ -136,6 +137,7 @@ export default function MeasurementView({ showToast }) {
               <tr>
                 <th>順位</th><th>Δ</th>
                 <th>順位</th><th>Δ</th>
+                <th>件/日</th><th>Δ</th>
               </tr>
             </thead>
             <tbody>
@@ -167,6 +169,15 @@ export default function MeasurementView({ showToast }) {
                     <span className="meas-days">{it.yahoo_days_after > 0 ? `${it.yahoo_days_after}日計測` : ''}</span>
                   </td>
                   <td className="meas-deltacell"><DeltaCell delta={it.yahoo_delta} /></td>
+                  <td className="meas-rank">
+                    <RankPair before={it.aff_per_day_before} after={it.aff_per_day_after} waiting={false} digits={2} />
+                    {(it.aff_ctr_before != null || it.aff_ctr_after != null) && (
+                      <span className="meas-days">
+                        CTR {it.aff_ctr_before != null ? it.aff_ctr_before : '—'}→{it.aff_ctr_after != null ? it.aff_ctr_after : '—'}%
+                      </span>
+                    )}
+                  </td>
+                  <td className="meas-deltacell"><DeltaCell delta={it.aff_per_day_delta} digits={2} /></td>
                   <td className="meas-spark">
                     <Sparkline series={it.series} yahooSeries={it.yahoo_series} appliedDate={it.applied_date} />
                   </td>

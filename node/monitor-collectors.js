@@ -353,6 +353,40 @@ function extractPartnerFromLinkUrl(linkUrl) {
 }
 
 // ============================================================
+// 台帳直結: affiliate_click を wp_soico_aff_clicks (真実の源) から取得
+//   GA4 を経由しないため DEBUG(shadow)中でも実データが取れ、サンプリング/
+//   約4日遅れ/pageLocation 寄せ不全の影響を受けない。
+//   返却形は GA4 版と互換: 日次=({post_id,date,aff_click}) / 商材別=({post_id,date,partner,clicks})
+// ============================================================
+async function fetchLedgerAffiliateClicks(startDate, endDate) {
+  const auth = wpAuthB64();
+  const base = (process.env.WP_API_BASE_URL || config.site.url || '').replace(/\/$/, '').replace(/\/wp-json.*$/, '');
+  const url = `${base}/wp-json/soico/v1/aff-clicks?start=${startDate}&end=${endDate}`;
+  const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+  if (!res.ok) throw new Error(`ledger aff-clicks ${res.status}`);
+  const json = await res.json();
+  const rows = Array.isArray(json.rows) ? json.rows : [];
+
+  // 商材別 (post_id, date, partner, clicks) — advertiser slug をそのまま partner とする
+  const byPartner = rows
+    .filter((r) => r.post_id > 0 && r.date)
+    .map((r) => ({ post_id: r.post_id, date: r.date, partner: r.partner || '', clicks: r.clicks || 0 }));
+
+  // 日次合算 (post_id, date, aff_click)
+  const agg = new Map();
+  for (const r of byPartner) {
+    const k = `${r.post_id}|${r.date}`;
+    agg.set(k, (agg.get(k) || 0) + r.clicks);
+  }
+  const daily = [...agg.entries()].map(([k, aff_click]) => {
+    const [post_id, date] = k.split('|');
+    return { post_id: parseInt(post_id, 10), date, aff_click };
+  });
+
+  return { daily, byPartner };
+}
+
+// ============================================================
 // WP REST API: 記事メタデータ（title, category, modified）
 // ============================================================
 async function fetchWpMeta(postIds) {
@@ -442,6 +476,7 @@ module.exports = {
   fetchGa4PageViews,
   fetchGa4AffiliateClicks,
   fetchGa4AffiliateClicksByPartner,
+  fetchLedgerAffiliateClicks,
   fetchWpMeta,
   fetchWpContent,
 };

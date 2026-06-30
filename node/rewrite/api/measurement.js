@@ -62,6 +62,19 @@ function buildRouter() {
         WHERE post_id = ? AND engine = 'yahoo' AND date >= ? AND rank IS NOT NULL
         ORDER BY date
       `);
+      // afクリック(収益アクション=台帳直結)。疎なので AVG でなく SUM、窓長差は per-day で吸収。
+      // aff/impr で「流入増」と「流入の転換効率」を分離する。
+      const affAggStmt = m.prepare(`
+        SELECT SUM(aff_click) AS sumAff, SUM(impressions) AS sumImpr,
+               COUNT(CASE WHEN aff_click IS NOT NULL THEN 1 END) AS days
+        FROM daily_metrics
+        WHERE post_id = ? AND date BETWEEN ? AND ?
+      `);
+      const affSeriesStmt = m.prepare(`
+        SELECT date, aff_click FROM daily_metrics
+        WHERE post_id = ? AND date >= ? AND aff_click IS NOT NULL
+        ORDER BY date
+      `);
       const dateAdd = m.prepare('SELECT date(?, ?) AS d');
 
       const items = sessions.map((s) => {
@@ -78,6 +91,17 @@ function buildRouter() {
         const yAfter = yahooAggStmt.get(s.post_id, postStart, latestYahoo || s.applied_date);
         const yahooBefore = yBefore.avgRank != null ? Number(yBefore.avgRank.toFixed(1)) : null;
         const yahooAfter = yAfter.avgRank != null ? Number(yAfter.avgRank.toFixed(1)) : null;
+        // afクリック before/after（収益アクション）。rank と逆で「多いほど良い」。
+        const affBefore = affAggStmt.get(s.post_id, preStart, preEnd);
+        const affAfter = affAggStmt.get(s.post_id, postStart, latest || s.applied_date);
+        const perDay = (sum, days) => (days > 0 ? Number((sum / days).toFixed(3)) : null);
+        const ctr = (aff, impr) => (impr > 0 ? Number(((aff / impr) * 100).toFixed(3)) : null);
+        const affSumBefore = affBefore.sumAff || 0;
+        const affSumAfter = affAfter.sumAff || 0;
+        const affPerDayBefore = perDay(affSumBefore, affBefore.days);
+        const affPerDayAfter = perDay(affSumAfter, affAfter.days);
+        const affCtrBefore = ctr(affSumBefore, affBefore.sumImpr || 0);
+        const affCtrAfter = ctr(affSumAfter, affAfter.sumImpr || 0);
         return {
           session_id: s.session_id,
           post_id: s.post_id,
@@ -100,8 +124,20 @@ function buildRouter() {
           yahoo_delta: yahooBefore != null && yahooAfter != null
             ? Number((yahooBefore - yahooAfter).toFixed(1)) : null,
           yahoo_days_after: yAfter.days,
+          // afクリック（台帳直結＝真実の源）。多いほど良い → delta 正 = 改善。
+          aff_before: affSumBefore,
+          aff_after: affSumAfter,
+          aff_per_day_before: affPerDayBefore,
+          aff_per_day_after: affPerDayAfter,
+          aff_per_day_delta: affPerDayBefore != null && affPerDayAfter != null
+            ? Number((affPerDayAfter - affPerDayBefore).toFixed(3)) : null,
+          aff_ctr_before: affCtrBefore,
+          aff_ctr_after: affCtrAfter,
+          aff_days_before: affBefore.days,
+          aff_days_after: affAfter.days,
           series: seriesStmt.all(s.post_id, preStart),
           yahoo_series: yahooSeriesStmt.all(s.post_id, preStart),
+          aff_series: affSeriesStmt.all(s.post_id, preStart),
         };
       });
 
