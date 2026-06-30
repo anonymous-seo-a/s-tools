@@ -22,6 +22,39 @@ function plain(s, n) {
  * @param {object} [opts] { lookback = 300, maxNotes = 6, maxEdits = 4 }
  * @returns {{ reject_reasons: Array<[string,number]>, reject_notes: string[], edits: Array<{before,after}>, judged_total: number } | null}
  */
+/**
+ * 効果フィードバック: confidence の自動消費。
+ * 効果測定(measurement)の結果を、地合い変動(market_shift)で汚れた測定を除外した
+ * 「クリーンな効果」だけ集計して生成へ返す。これにより signals.db の confidence が
+ * 表示にとどまらず、次回生成の方向付けを自動駆動する（B群の目的が生成まで届く）。
+ *   - 適用後 minDaysAfter 日以上 かつ confidence high/medium のみ採用（low/gap は除外）
+ *   - rank_delta>0=改善 / <0=悪化（rankは小さいほど上位）
+ * @returns {{n,improved,worsened,flat,excluded}|null}
+ */
+function buildEffectFeedback(genre, { minDaysAfter = 7, minN = 3 } = {}) {
+  let data;
+  try {
+    const { computeMeasurements } = require('../api/measurement');
+    data = computeMeasurements();
+  } catch (e) {
+    return null; // 効果測定が回せない環境では何も足さない（graceful）
+  }
+  const all = (data.items || []).filter((it) => it.genre === genre && it.days_after >= minDaysAfter);
+  const clean = all.filter(
+    (it) => it.rank_delta != null
+      && (it.measurement_confidence === 'high' || it.measurement_confidence === 'medium')
+  );
+  if (clean.length < minN) return null; // 統計的に語れる最小件数に満たない
+  let improved = 0, worsened = 0, flat = 0;
+  for (const it of clean) {
+    if (it.rank_delta > 0.5) improved++;
+    else if (it.rank_delta < -0.5) worsened++;
+    else flat++;
+  }
+  const excluded = all.filter((it) => it.measurement_confidence === 'low').length;
+  return { n: clean.length, improved, worsened, flat, excluded };
+}
+
 function buildLearningNotes(genre, { lookback = 300, maxNotes = 6, maxEdits = 4 } = {}) {
   const conn = db.open();
   const rows = conn.prepare(`
@@ -33,7 +66,6 @@ function buildLearningNotes(genre, { lookback = 300, maxNotes = 6, maxEdits = 4 
     ORDER BY d.judged_at DESC
     LIMIT ?
   `).all(genre, lookback);
-  if (rows.length === 0) return null;
 
   // 却下理由 頻度
   const reasonCount = new Map();
@@ -53,27 +85,45 @@ function buildLearningNotes(genre, { lookback = 300, maxNotes = 6, maxEdits = 4 
     }
   }
   const reject_reasons = [...reasonCount.entries()].sort((a, b) => b[1] - a[1]);
-  if (reject_reasons.length === 0 && notes.length === 0 && edits.length === 0) return null;
-  return { reject_reasons, reject_notes: notes, edits, judged_total: rows.length };
+  const effect = buildEffectFeedback(genre); // confidence の自動消費（clean な効果のみ）
+  const hasJudgment = reject_reasons.length > 0 || notes.length > 0 || edits.length > 0;
+  if (!hasJudgment && !effect) return null;
+  return { reject_reasons, reject_notes: notes, edits, judged_total: rows.length, effect };
 }
 
 // プロンプト注入用テキスト。
 function renderLearningNotes(ln) {
   if (!ln) return '';
-  const lines = ['# 過去の判定から学んだ注意点 (このジャンルで Daiki が却下/修正した傾向)'];
-  if (ln.reject_reasons.length) {
-    lines.push('よくある却下理由: ' + ln.reject_reasons.map(([r, n]) => `${r}(${n})`).join(' / '));
+  const lines = [];
+  const hasJudgment = ln.reject_reasons.length || ln.reject_notes.length || ln.edits.length;
+  if (hasJudgment) {
+    lines.push('# 過去の判定から学んだ注意点 (このジャンルで Daiki が却下/修正した傾向)');
+    if (ln.reject_reasons.length) {
+      lines.push('よくある却下理由: ' + ln.reject_reasons.map(([r, n]) => `${r}(${n})`).join(' / '));
+    }
+    if (ln.reject_notes.length) {
+      lines.push('却下メモ(具体指摘):');
+      ln.reject_notes.forEach((n) => lines.push(`  - ${n}`));
+    }
+    if (ln.edits.length) {
+      lines.push('Daiki の修正例 (AI案 → 採用版。同じ直しを繰り返さない):');
+      ln.edits.forEach((e) => lines.push(`  - AI案: ${e.before} → 採用: ${e.after}`));
+    }
+    lines.push('上記を踏まえ、過去に却下・修正された傾向を繰り返さないこと。');
   }
-  if (ln.reject_notes.length) {
-    lines.push('却下メモ(具体指摘):');
-    ln.reject_notes.forEach((n) => lines.push(`  - ${n}`));
+  if (ln.effect) {
+    const e = ln.effect;
+    lines.push('# 効果フィードバック (地合い変動を除いたクリーンな効果測定 / このジャンルの適用済みリライト)');
+    lines.push(`適用後7日以上・信頼できる測定 ${e.n} 件: 改善 ${e.improved} / 悪化 ${e.worsened} / 横ばい ${e.flat}`
+      + (e.excluded ? ` (地合い変動で ${e.excluded} 件を測定から除外)` : ''));
+    if (e.worsened > e.improved) {
+      lines.push('※ このジャンルは悪化が改善を上回っている。効果の薄い/逆効果な変更を避け、'
+        + '検索意図への即答性・独自情報(Experience)・信頼性(YMYL)の補強に絞ること。');
+    } else if (e.improved > e.worsened && e.improved > 0) {
+      lines.push('※ クリーンな測定で改善傾向。効いている方向(網羅性・独自情報の追加・構造化)を継続する。');
+    }
   }
-  if (ln.edits.length) {
-    lines.push('Daiki の修正例 (AI案 → 採用版。同じ直しを繰り返さない):');
-    ln.edits.forEach((e) => lines.push(`  - AI案: ${e.before} → 採用: ${e.after}`));
-  }
-  lines.push('上記を踏まえ、過去に却下・修正された傾向を繰り返さないこと。');
   return lines.join('\n');
 }
 
-module.exports = { buildLearningNotes, renderLearningNotes };
+module.exports = { buildLearningNotes, renderLearningNotes, buildEffectFeedback };

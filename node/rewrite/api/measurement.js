@@ -34,14 +34,10 @@ function getSignalsDB() {
   return _sigConn;
 }
 
-function buildRouter() {
-  const router = express.Router();
-
-  // GET /api/rewrite/measurement
-  //   apply 済み session ごとに 適用前28日平均順位 / 適用後平均順位 / 日次系列を返す。
-  //   GSC は約4日遅れで確定するため、適用直後は days_after=0 になりうる。
-  router.get('/', (_req, res) => {
-    try {
+// 効果測定の本体計算。route と learning の効果フィードバックで共有する。
+// apply 済み session ごとに 適用前28日平均順位 / 適用後平均順位 / 日次系列 + 交絡信頼度を返す。
+// GSC は約4日遅れで確定するため、適用直後は days_after=0 になりうる。
+function computeMeasurements() {
       const conn = open();
       const sessions = conn.prepare(`
         SELECT s.id AS session_id, s.post_id, s.genre,
@@ -55,7 +51,7 @@ function buildRouter() {
       `).all();
 
       if (sessions.length === 0) {
-        return res.json({ count: 0, latest_metric_date: null, items: [] });
+        return { count: 0, latest_metric_date: null, items: [] };
       }
 
       const mdb = require('../../monitor-db');
@@ -219,19 +215,26 @@ function buildRouter() {
         };
       });
 
-      return res.json({
+      return {
         count: items.length,
         latest_metric_date: latest,
         latest_yahoo_date: latestYahoo,
         items,
-      });
+      };
+}
+
+function buildRouter() {
+  const router = express.Router();
+  // GET /api/rewrite/measurement
+  router.get('/', (_req, res) => {
+    try {
+      return res.json(computeMeasurements());
     } catch (e) {
       console.error('[GET /rewrite/measurement]', e);
       return res.status(500).json({ error: e.message });
     }
   });
-
   return router;
 }
 
-module.exports = { buildRouter };
+module.exports = { buildRouter, computeMeasurements };
