@@ -39,16 +39,19 @@ function buildEffectFeedback(genre, { minDaysAfter = 7, minN = 3 } = {}) {
   } catch (e) {
     return null; // 効果測定が回せない環境では何も足さない（graceful）
   }
+  // 効果は地合いβ補正後(market_adjusted_delta)を優先。無ければ生の rank_delta。
+  const effOf = (it) => (it.market_adjusted_delta != null ? it.market_adjusted_delta : it.rank_delta);
   const all = (data.items || []).filter((it) => it.genre === genre && it.days_after >= minDaysAfter);
   const clean = all.filter(
-    (it) => it.rank_delta != null
+    (it) => effOf(it) != null
       && (it.measurement_confidence === 'high' || it.measurement_confidence === 'medium')
   );
   if (clean.length < minN) return null; // 統計的に語れる最小件数に満たない
   let improved = 0, worsened = 0, flat = 0;
   for (const it of clean) {
-    if (it.rank_delta > 0.5) improved++;
-    else if (it.rank_delta < -0.5) worsened++;
+    const e = effOf(it);
+    if (e > 0.5) improved++;
+    else if (e < -0.5) worsened++;
     else flat++;
   }
   const excluded = all.filter((it) => it.measurement_confidence === 'low').length;

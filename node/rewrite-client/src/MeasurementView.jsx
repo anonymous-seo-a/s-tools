@@ -191,6 +191,19 @@ export default function MeasurementView({ showToast }) {
                   </td>
                   <td className="meas-deltacell">
                     <DeltaCell delta={it.rank_delta} />
+                    {it.market_adjusted_delta != null && (
+                      <span
+                        title={`地合いβ補正後 — 同ジャンル市場Δ ${it.market_delta} を差し引いた記事固有の実質効果`}
+                        style={{
+                          display: 'block', fontSize: 10, marginTop: 2,
+                          color: it.market_adjusted_delta > 0 ? '#2e7d32'
+                            : it.market_adjusted_delta < 0 ? '#c62828' : '#888',
+                        }}
+                      >
+                        実質 {it.market_adjusted_delta > 0 ? '↑' : it.market_adjusted_delta < 0 ? '↓' : '→'}
+                        {Math.abs(it.market_adjusted_delta).toFixed(1)}
+                      </span>
+                    )}
                     <ConfidenceBadge confidence={it.measurement_confidence} confounding={it.confounding} />
                   </td>
                   <td className="meas-rank">

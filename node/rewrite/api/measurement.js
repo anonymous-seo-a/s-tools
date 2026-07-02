@@ -67,6 +67,14 @@ function computeMeasurements() {
         FROM daily_metrics
         WHERE post_id = ? AND date BETWEEN ? AND ? AND rank IS NOT NULL
       `);
+      // 同ジャンル市場のベースライン平均順位（地合いβ補正用）。当該記事も母集団に含むが
+      // ジャンル記事数が多く1記事の寄与は希薄。pre/post 各窓の水準差 = 地合い成分。
+      const marketAggStmt = m.prepare(`
+        SELECT AVG(mm.rank) AS avgRank, COUNT(mm.rank) AS days
+        FROM daily_metrics mm
+        JOIN articles a ON a.post_id = mm.post_id
+        WHERE a.category = ? AND mm.date BETWEEN ? AND ? AND mm.rank IS NOT NULL
+      `);
       const seriesStmt = m.prepare(`
         SELECT date, rank FROM daily_metrics
         WHERE post_id = ? AND date >= ? AND rank IS NOT NULL
@@ -146,6 +154,17 @@ function computeMeasurements() {
         const affCtrBefore = ctr(affSumBefore, affBefore.sumImpr || 0);
         const affCtrAfter = ctr(affSumAfter, affAfter.sumImpr || 0);
 
+        // 地合いβ補正: 記事のΔrank から 同ジャンル市場のΔrank を引いた「実質効果」。
+        // rankは小さいほど上位 → Δ正=改善。実質Δ = 記事Δ − 市場Δ。
+        const rankDelta = rankBefore != null && rankAfter != null
+          ? Number((rankBefore - rankAfter).toFixed(1)) : null;
+        const mktBefore = marketAggStmt.get(s.genre, preStart, preEnd).avgRank;
+        const mktAfter = marketAggStmt.get(s.genre, postStart, latest || s.applied_date).avgRank;
+        const marketDelta = mktBefore != null && mktAfter != null
+          ? Number((mktBefore - mktAfter).toFixed(2)) : null;
+        const marketAdjustedDelta = rankDelta != null && marketDelta != null
+          ? Number((rankDelta - marketDelta).toFixed(1)) : null;
+
         // 交絡 (地合い変動) による効果測定の信頼度。canon: market_shift→confidence割引 / gap→除外。
         // 既存の数値フィールドは一切変えない純粋加算（rank_delta 自体は補正しない=v1射程）。
         let measurementConfidence = null;
@@ -184,8 +203,10 @@ function computeMeasurements() {
           rank_before: rankBefore,
           rank_after: rankAfter,
           // rank は小さいほど上位 → delta 正 = 改善
-          rank_delta: rankBefore != null && rankAfter != null
-            ? Number((rankBefore - rankAfter).toFixed(1)) : null,
+          rank_delta: rankDelta,
+          // 地合いβ補正後の実質効果（市場Δを差し引いた記事固有分）
+          market_delta: marketDelta,
+          market_adjusted_delta: marketAdjustedDelta,
           days_before: before.days,
           days_after: after.days,
           impressions_after: after.sumImpr || 0,
