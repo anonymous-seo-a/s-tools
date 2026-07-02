@@ -1,13 +1,74 @@
 'use strict';
 
 const express = require('express');
+const fs = require('fs');
 const { open } = require('../db');
+
+// signals.db (seo-signals 所有) を Read-Only 自己探索。無ければ null = graceful。
+const SIGNALS_DB_CANDIDATES = [
+  process.env.SIGNALS_DB,
+  '/opt/seo-signals/db/signals.db',
+  '/Users/daikinozawa/Projects/seo-signals/db/signals.db',
+].filter(Boolean);
+let _sigConn;
+function getSignalsDB() {
+  if (_sigConn !== undefined) return _sigConn;
+  _sigConn = null;
+  try {
+    const p = SIGNALS_DB_CANDIDATES.find((x) => fs.existsSync(x));
+    if (!p) return _sigConn;
+    _sigConn = new (require('better-sqlite3'))(p, { readonly: true, fileMustExist: true });
+  } catch { _sigConn = null; }
+  return _sigConn;
+}
+
+// 軸5: AIO引用ギャップ = AI Overview が出るのに soico.jp が未引用のKW。
+// signals.db aio_occupancy(最新日) の gap を、その KW を top_kw に持つ記事へ写像して候補化。
+// organic順位が上位なのに未引用 = 引用適性を上げれば取りやすい高機会。live計算。
+function fetchAioGapCandidates(limit) {
+  const sig = getSignalsDB();
+  if (!sig) return { axis: 'axis5_aio_gap', calculated_at: null, items: [] };
+  const latest = sig.prepare('SELECT MAX(date) AS d FROM aio_occupancy').get()?.d;
+  if (!latest) return { axis: 'axis5_aio_gap', calculated_at: null, items: [] };
+  const gaps = sig.prepare(
+    `SELECT keyword, scope, top_domain, soico_search_rank
+       FROM aio_occupancy
+      WHERE date = ? AND aio_present = 1 AND soico_cited = 0`
+  ).all(latest);
+  const m = require('../../monitor-db').getDB();
+  const artStmt = m.prepare(
+    'SELECT post_id, url, title, category FROM articles WHERE top_kw = ? LIMIT 1'
+  );
+  const items = [];
+  for (const g of gaps) {
+    const art = artStmt.get(g.keyword);
+    if (!art) continue; // KWに対応する記事が無ければ候補化しない
+    const rank = g.soico_search_rank;
+    // 高機会ほど高スコア: organic上位なのに未引用 = 取りやすい。圏外(null)は低機会。
+    const score = rank != null ? Math.max(1, 100 - rank) : 5;
+    items.push({
+      post_id: art.post_id,
+      axis: 'axis5_aio_gap',
+      score_value: score,
+      score_components: {
+        keyword: g.keyword, genre: g.scope || art.category,
+        soico_search_rank: rank, aio_top_domain: g.top_domain, url: art.url, title: art.title,
+      },
+      period_days: null,
+      calculated_at: latest,
+      notes: 'AIO出現・soico未引用（引用適性リライト対象）',
+    });
+  }
+  items.sort((a, b) => b.score_value - a.score_value);
+  return { axis: 'axis5_aio_gap', calculated_at: latest, items: items.slice(0, limit) };
+}
 
 const AXIS_MAP = {
   '1': 'axis1_information_gain',
   '2': 'axis2_potential',
   '3': 'axis3_freshness',
   '4': 'axis4_decay',
+  '5': 'axis5_aio_gap',
 };
 const VALID_AXES = new Set(Object.values(AXIS_MAP));
 const VALID_STATUSES = new Set(['queued', 'in_progress', 'completed', 'cancelled']);
@@ -20,6 +81,7 @@ function parseAxis(input) {
 }
 
 function fetchCandidates(axis, limit) {
+  if (axis === 'axis5_aio_gap') return fetchAioGapCandidates(limit); // live計算(signals.db)
   const conn = open();
   const latest = conn.prepare(
     `SELECT MAX(calculated_at) AS latest FROM master_rewrite_target_score WHERE axis = ?`

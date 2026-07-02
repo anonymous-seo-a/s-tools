@@ -6,6 +6,7 @@ const AXIS_OPTIONS = [
   { key: 'axis2_potential',        label: '軸2 経済合理性', short: '軸2' },
   { key: 'axis3_freshness',        label: '軸3 鮮度',       short: '軸3' },
   { key: 'axis4_decay',            label: '軸4 Content decay', short: '軸4' },
+  { key: 'axis5_aio_gap',          label: '軸5 AIO引用ギャップ', short: '軸5' },
 ];
 
 const STATUS_OPTIONS = [
@@ -21,6 +22,7 @@ function formatScore(v, axis) {
   if (axis === 'axis2_potential') return Math.round(v).toLocaleString();
   if (axis === 'axis3_freshness') return v.toFixed(1) + 'ヶ月';
   if (axis === 'axis4_decay') return v.toFixed(3);
+  if (axis === 'axis5_aio_gap') return '機会' + v.toFixed(0);
   return v.toFixed(2);
 }
 
@@ -54,6 +56,14 @@ function ComponentSummary({ axis, components }) {
   }
   if (axis === 'axis1_information_gain') {
     return <span className="article-meta">{components.status || ''}</span>;
+  }
+  if (axis === 'axis5_aio_gap') {
+    return (
+      <span className="article-meta">
+        「{components.keyword}」· soico順位 {components.soico_search_rank ?? '圏外'} ·
+        AIO1位 {components.aio_top_domain || '—'}
+      </span>
+    );
   }
   return null;
 }

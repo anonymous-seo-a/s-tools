@@ -198,7 +198,7 @@ async function runDiffGeneration({ session_id, genre = 'cardloan' }) {
     bundle,
     master_rules: masterRules,
     genre: gcfg,
-    learning_notes: buildLearningNotes(gcfg.key),  // C 学習ループ: 過去判定の反映
+    learning_notes: buildLearningNotes(gcfg.key, { postId: session.post_id }),  // C 学習ループ + AIO引用適性
   });
 
   const llmRes = await sonnet({
