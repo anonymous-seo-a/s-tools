@@ -80,8 +80,10 @@ function buildEffectFeedback(genre, { minDaysAfter = 7, minN = 3 } = {}) {
   // 効果は地合いβ補正後(market_adjusted_delta)を優先。無ければ生の rank_delta。
   const effOf = (it) => (it.market_adjusted_delta != null ? it.market_adjusted_delta : it.rank_delta);
   const all = (data.items || []).filter((it) => it.genre === genre && it.days_after >= minDaysAfter);
+  // クリーン = 地合い信頼(high/medium) かつ A/B有意(十分な期間×ノイズ超)。
+  // 有意でない/汚染された測定は learning に載せない（誤診＝毒化の防止）。
   const clean = all.filter(
-    (it) => effOf(it) != null
+    (it) => effOf(it) != null && it.significant
       && (it.measurement_confidence === 'high' || it.measurement_confidence === 'medium')
   );
   if (clean.length < minN) return null; // 統計的に語れる最小件数に満たない

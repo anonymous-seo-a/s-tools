@@ -164,6 +164,10 @@ function computeMeasurements() {
           ? Number((mktBefore - mktAfter).toFixed(2)) : null;
         const marketAdjustedDelta = rankDelta != null && marketDelta != null
           ? Number((rankDelta - marketDelta).toFixed(1)) : null;
+        // A/B 統計的妥当性: 適用後14日以上 かつ 実質Δ(なければ生Δ)が 1位超 = 有意。
+        // ノイズや短期変動から learning が学ぶのを防ぐゲート。
+        const effForSig = marketAdjustedDelta != null ? marketAdjustedDelta : rankDelta;
+        const significant = after.days >= 14 && effForSig != null && Math.abs(effForSig) >= 1.0;
 
         // 交絡 (地合い変動) による効果測定の信頼度。canon: market_shift→confidence割引 / gap→除外。
         // 既存の数値フィールドは一切変えない純粋加算（rank_delta 自体は補正しない=v1射程）。
@@ -207,6 +211,7 @@ function computeMeasurements() {
           // 地合いβ補正後の実質効果（市場Δを差し引いた記事固有分）
           market_delta: marketDelta,
           market_adjusted_delta: marketAdjustedDelta,
+          significant, // A/B統計的妥当性: 十分な期間×ノイズ超の効果か
           days_before: before.days,
           days_after: after.days,
           impressions_after: after.sumImpr || 0,

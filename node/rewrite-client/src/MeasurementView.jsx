@@ -204,6 +204,18 @@ export default function MeasurementView({ showToast }) {
                         {Math.abs(it.market_adjusted_delta).toFixed(1)}
                       </span>
                     )}
+                    {it.significant && (
+                      <span
+                        title="A/B統計的に有意（適用後14日以上・実質Δが1位超）。learning はこの効果のみ学習。"
+                        style={{
+                          display: 'inline-block', marginTop: 3, marginLeft: 4, fontSize: 10,
+                          lineHeight: '14px', padding: '0 5px', borderRadius: 7,
+                          color: '#fff', background: '#2e7d32',
+                        }}
+                      >
+                        有意
+                      </span>
+                    )}
                     <ConfidenceBadge confidence={it.measurement_confidence} confounding={it.confounding} />
                   </td>
                   <td className="meas-rank">
