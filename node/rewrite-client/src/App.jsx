@@ -82,6 +82,9 @@ export default function App() {
         <div className="header-title-row">
           <h1>リライトツール</h1>
           <a href="/" className="header-back">← s-tools トップ</a>
+          <a href="/signals/" className="header-back" title="地合い変動 / AIO占有 / 行動ヒートマップ（計測センサー層）">
+            📡 計測シグナル
+          </a>
         </div>
         <div className="header-nav">
           <div className="header-tabs">

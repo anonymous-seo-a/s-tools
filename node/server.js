@@ -1262,7 +1262,7 @@ app.get('/api/monitor/jobs', (req, res) => {
   }
 });
 
-// ランディング (ルート) — 2 つの SPA への入口
+// ランディング (ルート) — 全ツールへの入口（導線ハブ）
 app.get('/', (req, res) => {
   res.send(`<!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><title>s-tools</title>
@@ -1276,8 +1276,9 @@ app.get('/', (req, res) => {
   .card-desc { font-size: 13px; color: #666; line-height: 1.6; }
 </style></head><body><div class="wrap">
   <h1>s-tools</h1>
+  <a class="card" href="/rewrite/"><div class="card-title">リライトツール</div><div class="card-desc">YMYL 記事の自走リライト (判定 / 対象選定 / 効果測定 / クリック分析 / 順位モニタリング / マスター)</div></a>
+  <a class="card" href="/signals/"><div class="card-title">seo-signals 計測センサー層</div><div class="card-desc">地合い変動タイムライン / AIO占有 / 行動ヒートマップ (learning の毒化防止シグナル)</div></a>
   <a class="card" href="/cta/"><div class="card-title">CTA Gap Fill Manager</div><div class="card-desc">既存記事への CTA 自動挿入 / 監査 / 商材管理 / 順位モニタリング</div></a>
-  <a class="card" href="/rewrite/"><div class="card-title">リライトツール</div><div class="card-desc">YMYL 記事の自走リライト (対象選定 / 分析 / 差分生成 / 判定 / 適用)</div></a>
 </div></body></html>`);
 });
 
