@@ -1,0 +1,1204 @@
+# 商材レジストリ — A-1センサス(2026-07-28)の公式URL実確認結果から生成
+# 生成: scripts/build_registry.py（手編集する場合は再生成で消えるため注意）
+# pages: 役割別URL。top のみ初期登録、product/spec/campaign 等は discover で拡張
+- product_id: acom
+  name: アコム カードローン
+  company: アコム株式会社
+  type: consumer_major
+  status: active
+  license: 関東財務局長（15）第00022号
+  note: 登録有効期間2025/12/21〜2028/12/20。MUFG
+  pages:
+    top: https://www.acom.co.jp/
+- product_id: aiful
+  name: アイフル キャッシングローン
+  company: アイフル株式会社
+  type: consumer_major
+  status: active
+  license: 近畿財務局長(15)第00218号
+  note: 最大30日間利息0円
+  pages:
+    top: https://www.aiful.co.jp/
+- product_id: lake
+  name: レイク
+  company: 新生フィナンシャル株式会社
+  type: consumer_major
+  status: active
+  license: 関東財務局長(11)第01024号
+  note: 本体403(bot遮断)→faq.lakealsa.comで運営会社・登録番号確認。VPS収集対象
+  pages:
+    top: https://lakealsa.com/
+- product_id: promise
+  name: プロミス
+  company: SMBCコンシューマーファイナンス株式会社
+  type: consumer_major
+  status: active
+  license: 関東財務局長（15）第00615号
+  note: www.promise.co.jpは検証環境から接続拒否→cyber.promise.co.jpで確認。登録番号はsmbc-cf.comで実確認
+  pages:
+    top: https://cyber.promise.co.jp/
+- product_id: smbc-mobit
+  name: SMBCモビット
+  company: 三井住友カード株式会社
+  type: consumer_major
+  status: active
+  note: 登録番号はトップ未掲載→会社概要ページで要再確認
+  pages:
+    top: https://www.mobit.ne.jp/
+- product_id: alco-system
+  name: アルコシステム 振込キャッシング
+  company: 株式会社アルコシステム
+  type: consumer_small
+  status: active
+  license: 兵庫県中播磨県民センター長（15）第50158号
+  note: 姫路市。50万円まで・年15.0-20.0%
+  pages:
+    top: https://www.alcosystem.co.jp/
+- product_id: amuza
+  name: キャッシングのアムザ
+  company: 株式会社アムザ
+  type: consumer_small
+  status: active
+  license: 福岡県知事(4)第08682号
+  note: 福岡市天神。5-100万円
+  pages:
+    top: https://www.amuza-c.com/
+- product_id: arrow
+  name: 消費者金融アロー フリープラン
+  company: 株式会社アロー
+  type: consumer_small
+  status: active
+  license: 愛知県知事（6）第04195号
+  note: 名古屋。フリープラン・借換ローン、200万円まで
+  pages:
+    top: https://www.my-arrow.co.jp/
+- product_id: ast
+  name: アスト キャッシング
+  company: 株式会社アスト
+  type: consumer_small
+  status: active
+  license: 四国財務局長（7）第00091号
+  note: 日本語ドメイン「アスト.com」。愛媛県松山市
+  pages:
+    top: https://xn--cck3b2b.com/
+- product_id: az
+  name: AZ フリーローン
+  company: AZ株式会社
+  type: consumer_small
+  status: active
+  license: 京都府知事（6）第03407号
+  note: 京都市。フリー/ビジネス/おまとめ/学生
+  pages:
+    top: https://www.az-k.co.jp/
+- product_id: belluna-notice
+  name: ベルーナノーティス
+  company: ''
+  type: consumer_small
+  status: unverified
+  note: 候補www.b-loan.jpが3回タイムアウト。VPSで再確認要（自社43記事言及の重要商材）
+  pages: {}
+- product_id: biaiji
+  name: ビアイジ コミュニティキャッシング
+  company: ビアイジ株式会社
+  type: consumer_small
+  status: active
+  license: 近畿財務局長(15)第00546号
+  note: 本社京都市
+  pages:
+    top: https://www.0120220010.com/
+- product_id: canet-hokkaido
+  name: キャネット（北海道）フリーローン
+  company: 株式会社キャネット（札幌）
+  type: consumer_small
+  status: active
+  license: 北海道知事(8)石第02857号
+  note: 原則道内居住者。京都の同名別会社と要区別（自社記事がどちらを指すか要確認）
+  pages:
+    top: https://canet-f.com/
+- product_id: canet-kyoto
+  name: キャネット（京都）
+  company: 株式会社キャネット（京都本店）
+  type: consumer_small
+  status: active
+  license: 近畿財務局長(6)第00813号
+  note: 京都・宮城・神奈川・滋賀・大阪に展開。北海道キャネットとは別法人
+  pages:
+    top: https://www.canet.co.jp/
+- product_id: carent
+  name: キャレント スーパーローン
+  company: 株式会社IPGファイナンシャルソリューションズ
+  type: consumer_small
+  status: active
+  license: 東京都知事(6)第31399号
+  note: ⚠公式LPに「事業資金専用（法人限定・個人事業主不可）」→個人向けCL記事での掲載可否は要判断
+  pages:
+    top: https://www.ca-rent.jp/
+- product_id: cashing-moff
+  name: キャッシングMOFF
+  company: 株式会社MOFF
+  type: consumer_small
+  status: unverified
+  note: 公式は「Coming soon」のみ。リニューアル中・新規停止(2024〜)。旧キャッシングエニー
+  pages:
+    top: https://moff-c.co.jp/
+- product_id: cashing-space
+  name: キャッシングスペース
+  company: 株式会社スペース
+  type: consumer_small
+  status: active
+  note: HTTP200で実在確認(HTTPS非対応)。大阪府堺市
+  pages:
+    top: http://cashing-space.jp/space/
+- product_id: central
+  name: セントラル カードローン
+  company: 株式会社セントラル
+  type: consumer_small
+  status: active
+  license: 四国財務局長（10）第00083号
+  note: 愛媛県松山市。マイレディス併設。300万円・年4.80-18.00%
+  pages:
+    top: https://011330.jp/
+- product_id: daily-cashing
+  name: デイリーキャッシング
+  company: 株式会社デイリープランニング
+  type: consumer_small
+  status: active
+  note: 東京都知事(3)第31698号。2025-06-27に新規受付再開（過去一時停止）
+  pages:
+    top: https://www.daily-p.co.jp/
+- product_id: direct-one
+  name: ダイレクトワン カードローン
+  company: ダイレクトワン株式会社
+  type: consumer_small
+  status: active
+  license: 東海財務局長(15)第00027号
+  note: スルガ銀行グループ。55日間利息0円キャンペーン中
+  pages:
+    top: https://www.directone.co.jp/directone/landing/pr/
+- product_id: eiwa
+  name: キャッシングのエイワ
+  company: 株式会社エイワ
+  type: consumer_small
+  status: active
+  license: 関東財務局長(15)第00154号
+  note: 対面与信（来店必須）。1-50万円
+  pages:
+    top: https://www.eiwa.jp/
+- product_id: excel
+  name: エクセル フリーキャッシング
+  company: 株式会社エクセル
+  type: consumer_small
+  status: active
+  license: 福岡県知事（6）第08636号
+  note: 博多店サイトで確認。本店www.excel-f.comはHTTPS非対応
+  pages:
+    top: https://www.excel-hakata.com/
+- product_id: fukuho
+  name: フクホー フリーキャッシング
+  company: フクホー株式会社
+  type: consumer_small
+  status: active
+  license: 大阪府知事(07)第12736号
+  note: 大阪難波・1967年創業
+  pages:
+    top: https://fukufo.co.jp/
+- product_id: futaba
+  name: キャッシングのフタバ
+  company: フタバ株式会社
+  type: consumer_small
+  status: active
+  license: 東京都知事(5)第31502号
+  note: 融資1-50万円
+  pages:
+    top: https://www.822828.jp/
+- product_id: hello-happy
+  name: ハローハッピー キャッシング
+  company: 株式会社ハローハッピー
+  type: consumer_small
+  status: active
+  license: 大阪府知事（07）第12823号
+  note: 大阪市浪速区。実質年率18.00%
+  pages:
+    top: https://hello-happy.jp/
+- product_id: itsumo
+  name: 消費者金融いつも
+  company: 株式会社いつも（K・ライズHDグループ）
+  type: consumer_small
+  status: active
+  license: 高知県知事(5)第01519号
+  note: 最大60日間利息0円
+  pages:
+    top: https://126.co.jp/
+- product_id: lions-lease
+  name: ライオンズリース キャッシング
+  company: ライオンズリース株式会社
+  type: consumer_small
+  status: active
+  note: 愛知県知事(15)第00595号。名古屋
+  pages:
+    top: https://www.lionslease.co.jp/
+- product_id: momiji-finance
+  name: もみじファイナンス
+  company: もみじ商事株式会社
+  type: consumer_small
+  status: active
+  note: 広島県知事(6)第02698号。HTTPのみ配信（HTTPS証明書は共用ホスト名義）
+  pages:
+    top: http://www.momiji24.jp/
+- product_id: nichiden
+  name: ニチデン キャッシング
+  company: 株式会社日電社
+  type: consumer_small
+  status: active
+  license: 大阪府知事（06）第12923号
+  note: 初回最大100日間利息0円。融資対象は近畿圏+三重
+  pages:
+    top: https://www.nichidensha.com/
+- product_id: noloan
+  name: ノーローン
+  company: 新生パーソナルローン株式会社
+  type: consumer_small
+  status: stopped
+  note: ⚠全商品の新規・再契約受付停止(既存会員は継続)。SBI新生銀行グループ
+  pages:
+    top: https://noloan.com/
+- product_id: plannel
+  name: プランネル フリーローン300
+  company: 株式会社プランネル
+  type: consumer_small
+  status: active
+  license: 東京都知事（13）第07439号
+  note: 千代田区（日本文化センターG）。10-300万円・年4.5-18.0%。同名ヤミ金への注意喚起あり
+  pages:
+    top: https://www.0120-70-7777.jp/
+- product_id: progress
+  name: プログレス クイックキャッシング
+  company: 株式会社プログレス
+  type: consumer_small
+  status: active
+  note: 登録番号はトップ未確認・会社概要404 → 要再確認
+  pages:
+    top: https://progress-f.com/
+- product_id: promise-ladies
+  name: プロミス レディースキャッシング
+  company: SMBCコンシューマーファイナンス株式会社
+  type: consumer_small
+  status: unverified
+  note: 専用ページURL未実確認(JSレンダリング)。第三者媒体では取扱継続
+  pages:
+    top: https://cyber.promise.co.jp/
+- product_id: ryfety
+  name: ライフティ キャッシング
+  company: ライフティ株式会社
+  type: consumer_small
+  status: stopped
+  license: 東京都知事(8)第28992号
+  note: ⚠「新規キャッシング受付を停止」公式明記（2026/7/13付お知らせ内）
+  pages:
+    top: https://www.ryfety.com/
+- product_id: saison-fundex
+  name: セゾンファンデックス カードローン（VIPローンカード等）
+  company: 株式会社セゾンファンデックス
+  type: consumer_small
+  status: stopped
+  license: 関東財務局長（12）第00897号
+  note: ⚠カードローン全6商品の新規申込を2026/1/30停止（公式告知実確認）。フリーローンは継続。※「VIPローンカード」の帰属はオリックス系と要突合
+  pages:
+    top: https://www.fundex.co.jp/news/20260126.html
+- product_id: sky-office
+  name: スカイオフィス キャッシング
+  company: 株式会社スカイオフィス
+  type: consumer_small
+  status: active
+  license: 福岡県知事(7)第08437号
+  note: 福岡市。1-50万円
+  pages:
+    top: https://www.skyoffice.info/
+- product_id: space
+  name: キャッシング スペース
+  company: ''
+  type: consumer_small
+  status: unverified
+  note: 候補cashing-space.jpがTLS証明書不整合で実確認不可。後日再確認
+  pages: {}
+- product_id: spirits
+  name: スピリッツ キャッシング
+  company: ''
+  type: consumer_small
+  status: active
+  note: '正式法人名・登録番号の確度不足（断片: 07-12508/ディー・ビー・エル）→ 要再確認'
+  pages:
+    top: https://www.ee-spirit.com/index.html
+- product_id: t-and-s
+  name: ティー・アンド・エス キャッシング
+  company: 株式会社ティー・アンド・エス
+  type: consumer_small
+  status: active
+  note: 東京都知事(8)第29447号
+  pages:
+    top: https://www.t-s29447.co.jp/
+- product_id: uny-finance
+  name: ユニーファイナンス
+  company: 株式会社ユニーファイナンス
+  type: consumer_small
+  status: unverified
+  note: 公式URL特定できず。第三者情報では2024-04にローン新規受付停止
+  pages: {}
+- product_id: mizuho-cardloan
+  name: みずほ銀行カードローン
+  company: 株式会社みずほ銀行
+  type: bank_mega
+  status: unverified
+  note: ドメイン全体がWAF遮断(403)。URL実在は検索インデックスで確認。VPS再挑戦対象
+  pages:
+    top: https://www.mizuhobank.co.jp/loan_card/index.html
+- product_id: mufg-banquic
+  name: 三菱UFJ銀行 カードローン「バンクイック」
+  company: 株式会社三菱UFJ銀行
+  type: bank_mega
+  status: active
+  note: 年1.4-14.6%
+  pages:
+    top: https://www.bk.mufg.jp/kariru/banquic/index.html
+- product_id: resona-cardloan
+  name: りそなカードローン
+  company: 株式会社りそな銀行
+  type: bank_mega
+  status: active
+  note: 埼玉りそなと共通ページ。curl200確認
+  pages:
+    top: https://www.resonabank.co.jp/kojin/cardloan/
+- product_id: smbc-cardloan
+  name: 三井住友銀行 カードローン
+  company: 株式会社三井住友銀行
+  type: bank_mega
+  status: active
+  note: 年1.5-14.5%
+  pages:
+    top: https://www.smbc.co.jp/kojin/cardloan/
+- product_id: aeonbank-cardloan
+  name: イオン銀行カードローン
+  company: 株式会社イオン銀行
+  type: bank_net
+  status: active
+  note: 年3.8-13.8%(2026-01-01現在)。/cardloan/直下は404
+  pages:
+    top: https://www.aeonbank.co.jp/loan/lp/card_loan/
+- product_id: jibun-loan
+  name: auじぶん銀行カードローン「じぶんローン」
+  company: auじぶん銀行株式会社
+  type: bank_net
+  status: active
+  note: 年1.38-17.8%
+  pages:
+    top: https://www.jibunbank.co.jp/products/loan/
+- product_id: lawson-bank-cardloan
+  name: ローソン銀行 キャッシング・カードローン
+  company: 株式会社ローソン銀行
+  type: bank_net
+  status: active
+  note: ⚠独立商品でなくクレカ「ローソンPontaプラス」付帯機能
+  pages:
+    top: https://www.lawsonbank.jp/creditcard/use/cashing/
+- product_id: minna-no-ginko-loan
+  name: みんなの銀行 Loan
+  company: 株式会社みんなの銀行
+  type: bank_net
+  status: active
+  note: SPA。年1.5-14.5%(商品概要PDF)
+  pages:
+    top: https://www.minna-no-ginko.com/service/loan/
+- product_id: orixbank-cardloan
+  name: オリックス銀行カードローン
+  company: オリックス銀行株式会社
+  type: bank_net
+  status: active
+  note: bot遮断あり(curl200確認)。年1.7-14.8%
+  pages:
+    top: https://www.orixbank.co.jp/personal/cardloan/
+- product_id: paypay-cardloan
+  name: PayPay銀行カードローン
+  company: PayPay銀行株式会社
+  type: bank_net
+  status: active
+  note: 金利は動的表示部
+  pages:
+    top: https://www.paypay-bank.co.jp/cardloan/index.html
+- product_id: rakuten-super-loan
+  name: 楽天銀行スーパーローン
+  company: 楽天銀行株式会社
+  type: bank_net
+  status: active
+  note: 年1.9-14.5%
+  pages:
+    top: https://www.rakuten-bank.co.jp/loan/cardloan/
+- product_id: sbi-shinsei-cardloan
+  name: SBI新生銀行カードローン
+  company: 株式会社SBI新生銀行
+  type: bank_net
+  status: unverified
+  note: 接続タイムアウトで受付状況未確認。「エル」との商品体系関係も要追認。VPS再挑戦対象
+  pages:
+    top: https://www.sbishinseibank.co.jp/retail/card_loan/splus/
+- product_id: sbi-sumishin-cardloan
+  name: 住信SBIネット銀行 カードローン
+  company: 住信SBIネット銀行株式会社
+  type: bank_net
+  status: active
+  note: ⚠2026-08-03商号「ドコモSMTBネット銀行」へ変更・ブランド「ドコモの銀行」開始(公式プレス確認)。年2.04-14.94%。旧パス/lineup/cardloan/は404
+  pages:
+    top: https://www.netbk.co.jp/contents/lineup/card-loan/
+- product_id: sevenbank-loan-service
+  name: セブン銀行 ローンサービス
+  company: 株式会社セブン銀行
+  type: bank_net
+  status: active
+  note: 限度額別 年12.0-15.0%帯。保証会社アコム
+  pages:
+    top: https://www.sevenbank.co.jp/personal/netbank/deposit_loan/loan/
+- product_id: sonybank-cardloan
+  name: ソニー銀行 カードローン
+  company: ソニー銀行株式会社
+  type: bank_net
+  status: active
+  note: 年2.5-13.8%。⚠旧moneykit.netはDNS消滅、現公式はsonybank.jp
+  pages:
+    top: https://sonybank.jp/products/cl/
+- product_id: suruga-cardloan
+  name: スルガ銀行カードローン
+  company: スルガ銀行株式会社
+  type: bank_net
+  status: active
+  note: Shift_JIS+JSレンダリング。curl200・title確認
+  pages:
+    top: https://www.surugabank.co.jp/reserved/
+- product_id: tokyostar-cardloan-alpha
+  name: 東京スター銀行 スターカードローンα
+  company: 株式会社東京スター銀行
+  type: bank_net
+  status: active
+  note: 年1.5-14.6%。α表記はページ抽出では未確認
+  pages:
+    top: https://www.tokyostarbank.co.jp/products/loan/cardloan/
+- product_id: uibank-ui-plan
+  name: UI銀行 UI Plan（スマホローン）
+  company: 株式会社UI銀行
+  type: bank_net
+  status: active
+  note: 変動 年1.3-14.5%。公式呼称は「スマホローン」(UI Plan表記必須の掲載基準と整合)
+  pages:
+    top: https://www.uibank.co.jp/products/plan/
+- product_id: 18shinwa-cardloan
+  name: 十八親和銀行カードローン
+  company: 株式会社十八親和銀行
+  type: bank_regional
+  status: active
+  note: FFG系(curl200確認)
+  pages:
+    top: https://www.18shinwabank.co.jp/personal/service/mokuteki/cardloan/
+- product_id: 77-cardloan
+  name: 77カードローン
+  company: 株式会社七十七銀行
+  type: bank_regional
+  status: active
+  note: 年7.9-14.8%。別商品77スマートネクスト等
+  pages:
+    top: https://www.77bank.co.jp/personal/loan/card/77card/
+- product_id: 82-new-mighty
+  name: 八十二長野銀行カードローン〈ニューマイティー〉
+  company: 株式会社八十二長野銀行
+  type: bank_regional
+  status: active
+  note: ⚠82bank.co.jpから301恒久移転。年9.625%/14.225%変動
+  pages:
+    top: https://bank.82group.jp/kojin/kariru/cardloan/index.html
+- product_id: aichi-bank-cardloan-ai
+  name: あいち銀行カードローン「愛」
+  company: 株式会社あいち銀行
+  type: bank_regional
+  status: active
+  note: 旧愛知銀行+中京銀行の合併行。年1.6-13.9%・10-1000万円
+  pages:
+    top: https://www.aichibank.co.jp/loan/card/
+- product_id: akita-bank-smartnext
+  name: 秋田銀行カードローン〈あきぎんスマートネクスト〉
+  company: 株式会社秋田銀行
+  type: bank_regional
+  status: active
+  note: 金利年1.8〜14.8%・極度額10万〜800万円。別商品〈あきぎん〉プライムカードも存在
+  pages:
+    top: https://www.akita-bank.co.jp/personal/borrow/smartnext/card/
+- product_id: aomori-michinoku-cardloan
+  name: 青森みちのくカードローン
+  company: 株式会社青森みちのく銀行
+  type: bank_regional
+  status: active
+  note: 固定 年2.4-14.5%(2026-04-20現在)
+  pages:
+    top: https://www.am-bk.co.jp/kojin/loan/cardloan/
+- product_id: ashikaga-moshica
+  name: 足利銀行カードローン〈モシカ〉
+  company: 株式会社足利銀行
+  type: bank_regional
+  status: active
+  note: bot遮断あり(curl200確認)
+  pages:
+    top: https://www.ashikagabank.co.jp/loan/moshica/
+- product_id: awa-bank-smartnext
+  name: 阿波銀行カードローン「あわぎんスマートネクスト」
+  company: 株式会社阿波銀行
+  type: bank_regional
+  status: active
+  note: 年1.7-14.8%・10-800万円
+  pages:
+    top: https://www.awabank.co.jp/smartnext/
+- product_id: chibagin-quick-power-advance
+  name: ちばぎんカードローン（クイックパワー＜アドバンス＞）
+  company: 株式会社千葉銀行
+  type: bank_regional
+  status: active
+  note: 金利数値は本文抽出未確認
+  pages:
+    top: https://www.chibabank.co.jp/kojin/services/loan/cardloan/cardloan_new
+- product_id: chibakogyo-bank-anshin-up
+  name: ちば興銀カードローン「あんしんアップ」
+  company: 株式会社千葉興業銀行
+  type: bank_regional
+  status: active
+  note: 変動年1.4〜14.8%・10万〜1,000万円。同ページで「リリーフ」「すまいる」も案内
+  pages:
+    top: https://www.chibakogyo-bank.co.jp/kojin/cardloan/anshinup.html
+- product_id: dhbk-asca
+  name: 第四北越銀行カードローンASCA
+  company: 株式会社第四北越銀行
+  type: bank_regional
+  status: active
+  note: 固定 年1.5-14.8%
+  pages:
+    top: https://www.dhbk.co.jp/individual/loan/card/asca.html
+- product_id: fukuho-bank-cardloan
+  name: 福邦銀行カードローン（合併により銀行消滅）
+  company: 株式会社福井銀行（旧・株式会社福邦銀行）
+  type: bank_regional
+  status: stopped
+  note: 福邦銀行は2026-05-02に福井銀行と合併し商号消滅。既存カードは継続利用可、新規商品なし
+  pages:
+    top: https://www.fukuibank.co.jp/
+- product_id: fukui-bank-cardloan
+  name: 福井銀行カードローン
+  company: 株式会社福井銀行
+  type: bank_regional
+  status: active
+  note: 年2.8-14.6%・10-1000万円。住宅ローン利用者限定「プレミアム」は別商品
+  pages:
+    top: https://www.fukuibank.co.jp/personal/loan/card/standard/
+- product_id: fukuoka-cardloan
+  name: 福岡銀行カードローン
+  company: 株式会社福岡銀行
+  type: bank_regional
+  status: active
+  note: FFG系はWebFetchタイムアウト(curl200確認)
+  pages:
+    top: https://www.fukuokabank.co.jp/personal/service/mokuteki/cardloan/
+- product_id: fukushima-bank-fukugin-cardloan
+  name: ふくぎんカードローン
+  company: 株式会社福島銀行
+  type: bank_regional
+  status: active
+  note: アプリ申込型。金利は審査により決定とのみ記載
+  pages:
+    top: https://www.fukushimabank.co.jp/k-loan/cardloan/
+- product_id: gungin-smile-partner
+  name: ぐんぎんカードローン すまいるパートナー
+  company: 株式会社群馬銀行
+  type: bank_regional
+  status: active
+  note: 店頭 年10.625%・優遇下限5.625%。別商品ナイスサポートカード＋
+  pages:
+    top: https://www.gunmabank.co.jp/kojin/kariru/cardloan/smile/
+- product_id: higo-bank-web-cardloan
+  name: 肥後銀行 WEBカードローン
+  company: 株式会社肥後銀行
+  type: bank_regional
+  status: unverified
+  note: 2URLとも403(bot遮断)。keeper収集はPlaywright実機で再挑戦対象
+  pages:
+    top: https://www.higobank.co.jp/
+- product_id: himegin-quick-cardloan
+  name: ひめぎんクイックカードローン
+  company: 株式会社愛媛銀行
+  type: bank_regional
+  status: active
+  note: 年4.4-14.6%
+  pages:
+    top: https://www.himegin.co.jp/personal/loan/card/quick/
+- product_id: hirogin-mylifeplus-card
+  name: 〈ひろぎん〉マイライフプラス（カード型）
+  company: 株式会社広島銀行
+  type: bank_regional
+  status: active
+  note: 旧www.mlp.ccは302リダイレクト。カード型 年3.125-14.125%変動・10-500万円
+  pages:
+    top: https://www.hirogin.co.jp/lp/loan/card-loan/
+- product_id: hokkaido-rapid
+  name: 北海道銀行カードローン「ラピッド」
+  company: 株式会社北海道銀行
+  type: bank_regional
+  status: active
+  note: 商品専用ドメイン。年1.9-14.95%。偽サイト注意喚起あり
+  pages:
+    top: https://rapi.jp/
+- product_id: hokkoku-day-smart
+  name: 北國カードローン DAY SMART
+  company: 株式会社北國銀行
+  type: bank_regional
+  status: active
+  note: 変動・極度額別
+  pages:
+    top: https://www.hokkokubank.co.jp/customer/loan/daysmart/index.html
+- product_id: hokuriku-bank-super-now
+  name: 北陸銀行カードローン「スーパーNOW」
+  company: 株式会社北陸銀行
+  type: bank_regional
+  status: unverified
+  note: 2URLとも403(bot遮断)。keeper収集はPlaywright実機で再挑戦対象
+  pages:
+    top: https://hokugin.co.jp/
+- product_id: hokuto-bank-super-assist-cardloan
+  name: 〈北都銀行〉ローン「スーパーアシスト」カードローンプラン
+  company: 株式会社北都銀行
+  type: bank_regional
+  status: active
+  note: Web完結・年14.6%固定・極度額最大50万円。来店契約型「カードローン1000」は別商品
+  pages:
+    top: https://www.hokutobank.co.jp/loan_super/cardlp/
+- product_id: hokuyo-super-arca
+  name: 北洋銀行カードローン「スーパーアルカ」
+  company: 株式会社北洋銀行
+  type: bank_regional
+  status: active
+  note: 年1.9-14.7%
+  pages:
+    top: https://www.hokuyobank.co.jp/superarca/
+- product_id: hyakugo-bank-mycard-dream
+  name: 百五マイカード「DREAM」
+  company: 株式会社百五銀行
+  type: bank_regional
+  status: active
+  note: 固定年1.8-14.7%・10-800万円
+  pages:
+    top: https://www.hyakugo.co.jp/kariru/dream/
+- product_id: iyo-bank-new-speed-cardloan
+  name: 伊予銀行 新スピードカードローン
+  company: 株式会社伊予銀行
+  type: bank_regional
+  status: active
+  note: WEB完結。返済用口座あり/なし2方式
+  pages:
+    top: https://www.iyobank.co.jp/kariru/newspeedcard/
+- product_id: joyo-cashpit
+  name: 常陽銀行カードローン（キャッシュピット）
+  company: 株式会社常陽銀行
+  type: bank_regional
+  status: active
+  note: bot遮断あり(curl200確認)
+  pages:
+    top: https://www.joyobank.co.jp/personal/loan/cashpit/
+- product_id: juroku-bank-q-loan
+  name: 十六銀行カードローン「Q-LOAN」
+  company: 株式会社十六銀行
+  type: bank_regional
+  status: active
+  note: 変動年4.6-14.6%・1-500万円
+  pages:
+    top: https://www.juroku.co.jp/personal/loan/q-loan/index.html
+- product_id: kagawa-bank-papatto-card
+  name: 香川銀行カードローン「PaPaっとCard」
+  company: 株式会社香川銀行
+  type: bank_regional
+  status: active
+  note: トモニHD傘下。住宅ローン利用者専用「家っとカード」は別商品
+  pages:
+    top: https://www.kagawabank.co.jp/kojin/loan/papacard/papacard_papa.html
+- product_id: kagoshima-bank-cardloan-s
+  name: 鹿児島銀行 かぎんカードローンS
+  company: 株式会社鹿児島銀行
+  type: bank_regional
+  status: active
+  note: 返済用口座不要型/引落型の2タイプ
+  pages:
+    top: https://www.kagin.co.jp/kojin/loan/cardloan_s.html
+- product_id: kanagawa-bank-my-support
+  name: 神奈川銀行カードローン「マイサポート」
+  company: 株式会社神奈川銀行
+  type: bank_regional
+  status: active
+  note: 年7.30-11.30%・10-100万円。個別ページはJS描画
+  pages:
+    top: https://www.kanagawabank.co.jp/kojin/loan/card/my-support/
+- product_id: kansaimirai-cardloan
+  name: 関西みらいカードローン
+  company: 株式会社関西みらい銀行
+  type: bank_regional
+  status: active
+  note: りそなG共通のWebFetchタイムアウト(curl200確認)
+  pages:
+    top: https://www.kansaimiraibank.co.jp/kojin/cardloan/
+- product_id: keiyo-bank-cardloan
+  name: 京葉銀行カードローン
+  company: 株式会社京葉銀行
+  type: bank_regional
+  status: active
+  note: 年4.5〜13.0%・30万〜300万円。優遇金利「Ⅱ型」は別ページ
+  pages:
+    top: https://www.keiyobank.co.jp/individual/loan/card/card_loan/
+- product_id: kiraboshi-cardloan
+  name: きらぼし銀行カードローン
+  company: 株式会社きらぼし銀行
+  type: bank_regional
+  status: active
+  note: 金利7段階(2026-02-02現在)
+  pages:
+    top: https://www.kiraboshibank.co.jp/kariru/card/index.html
+- product_id: kiyo-bank-cardloan-plus
+  name: 紀陽銀行カードローンプラス
+  company: 株式会社紀陽銀行
+  type: bank_regional
+  status: active
+  note: 同一ページに「プラス」(10-800万円)と「S」(10-100万円・年14.9%)併載
+  pages:
+    top: https://www.kiyobank.co.jp/personalloan/card/
+- product_id: kochi-bank-cardloan
+  name: 高知銀行カードローン
+  company: 株式会社高知銀行
+  type: bank_regional
+  status: active
+  note: 一覧ページ。こうぎん/モア・プラス/はちきん/サポート/ZEYO/move の複数商品
+  pages:
+    top: https://www.kochi-bank.co.jp/loan/cardloan/
+- product_id: kumamoto-bank-cardloan
+  name: 熊本銀行カードローン
+  company: 株式会社熊本銀行
+  type: bank_regional
+  status: unverified
+  note: 2URLとも接続タイムアウト。公式に商品ページ存在の模様、実取得未達
+  pages:
+    top: https://www.kumamotobank.co.jp/
+- product_id: kyoto-bank-cardloan-direct
+  name: 京都銀行カードローン＜ダイレクト＞
+  company: 株式会社京都銀行
+  type: bank_regional
+  status: active
+  note: 年1.9-14.5%・10-1000万円。WEB完結・口座なし可
+  pages:
+    top: https://www.kyotobank.co.jp/kojin/loan/card/
+- product_id: kyoto-chushin-castle
+  name: 「京都ちゅうしんきゃっする」カードローン
+  company: 京都中央信用金庫
+  type: bank_regional
+  status: active
+  note: 信用金庫。金利数値はページ空欄→商品概要PDF要確認
+  pages:
+    top: https://www.chushin.co.jp/kariru/cardloan/castle/index.html
+- product_id: minato-bank-cardloan
+  name: みなとカードローン
+  company: 株式会社みなと銀行
+  type: bank_regional
+  status: unverified
+  note: 2URLともタイムアウト。関西みらいFG傘下。keeper収集で再挑戦対象
+  pages:
+    top: https://www.minatobk.co.jp/
+- product_id: miyagin-omakasekun
+  name: みやぎんパートナーカードローン「おまかせくん」
+  company: 株式会社宮崎銀行
+  type: bank_regional
+  status: active
+  note: 年0.9-14.5%
+  pages:
+    top: https://www.miyagin.co.jp/lp/loan/omakase/
+- product_id: nagasaki-bank-premier-a
+  name: 長崎銀行 ながさきカードローン プレミアA
+  company: 株式会社長崎銀行
+  type: bank_regional
+  status: active
+  note: 年2.8-14.95%、10-800万円。他にマイ・ファースト/V-CLASS等あり
+  pages:
+    top: https://www.nagasakibank.co.jp/lp/premium/pc/
+- product_id: nagoya-bank-cardloan
+  name: 名古屋銀行カードローン
+  company: 株式会社名古屋銀行
+  type: bank_regional
+  status: active
+  note: 固定年1.8-13.8%・10-1000万円
+  pages:
+    top: https://www.meigin.com/kojin/loan/cardloan/index.html
+- product_id: nanto-cardloan
+  name: 南都銀行カードローン
+  company: 株式会社南都銀行
+  type: bank_regional
+  status: active
+  note: スマートタイプ(年0.9-14.95%)とクイックタイプ(年2.5-14.95%)の2タイプ
+  pages:
+    top: https://www.nantobank.co.jp/kojin/kariru/nantobankcardloan/
+- product_id: ncb-app-cardloan
+  name: 西日本シティ銀行カードローン
+  company: 株式会社西日本シティ銀行
+  type: bank_regional
+  status: active
+  note: 年0.95-14.5%
+  pages:
+    top: https://www.ncbank.co.jp/loan/card/app/
+- product_id: ogaki-kyoritsu-bank-the-maximum
+  name: 大垣共立銀行カードローン「ザ・マキシマム」
+  company: 株式会社大垣共立銀行
+  type: bank_regional
+  status: active
+  note: 年2.45-14.5%・10-1000万円
+  pages:
+    top: https://www.okb.co.jp/personal/maximum/
+- product_id: oita-bank-cardloan
+  name: 大分銀行 ハッピーカードローン
+  company: 株式会社大分銀行
+  type: bank_regional
+  status: active
+  note: 年5.0-14.5%、10-500万円
+  pages:
+    top: https://www.oitabank.co.jp/loan/cardloan/happycard.html
+- product_id: okinawa-bank-checkit
+  name: 沖縄銀行 カードローン チェキット
+  company: 株式会社沖縄銀行
+  type: bank_regional
+  status: active
+  note: 10-500万円、年14.6%固定
+  pages:
+    top: https://www.okinawa-bank.co.jp/kojin/kariru/checkit.html
+- product_id: ryukyu-bank-shiawase-cardloan
+  name: 琉球銀行 しあわせのカードローン
+  company: 株式会社琉球銀行
+  type: bank_regional
+  status: active
+  note: Web完結対応
+  pages:
+    top: https://www.ryugin.co.jp/kariru/card_loan/shiawase_cardloan/
+- product_id: saga-cardloan
+  name: 佐賀銀行カードローン
+  company: 株式会社佐賀銀行
+  type: bank_regional
+  status: active
+  note: 固定・保証料込 年2.0-14.6%。別商品Neoca等あり
+  pages:
+    top: https://www.sagabank.co.jp/kojin/loan/sagin-card-loan.html
+- product_id: sanjusan-bank-cardloan
+  name: 三十三銀行カードローン
+  company: 株式会社三十三銀行
+  type: bank_regional
+  status: active
+  note: 通常型と口座レス型、年0.9-14.5%・10-1000万円
+  pages:
+    top: https://www.33bank.co.jp/kojin/loan/free/card_loan.html
+- product_id: sendai-cardloan-neo
+  name: 仙台銀行カードローンNEO
+  company: 株式会社仙台銀行
+  type: bank_regional
+  status: active
+  note: 金利はPDF商品概要別掲
+  pages:
+    top: https://www.sendaibank.co.jp/individual/loan/personal/card/
+- product_id: shikoku-bank-cardloan-4s
+  name: 四国銀行カードローン4'S
+  company: 株式会社四国銀行
+  type: bank_regional
+  status: active
+  note: 年4.0-14.6%・最大800万円
+  pages:
+    top: https://www.shikokubank.co.jp/individual/kariru/cardloanfs/
+- product_id: shizuoka-seleca
+  name: 静岡銀行カードローン「セレカ」
+  company: 株式会社静岡銀行
+  type: bank_regional
+  status: active
+  note: 年1.5-14.5%
+  pages:
+    top: https://www.shizuokabank.co.jp/seleca/
+- product_id: tajima-bank-cardloan
+  name: 但馬銀行カードローン
+  company: 株式会社但馬銀行
+  type: bank_regional
+  status: active
+  note: 口座あり/なし2型。年1.9-14.5%・10-1000万円
+  pages:
+    top: https://www.tajimabank.co.jp/kojin/kariru/t_cardlp/
+- product_id: tochigi-bank-smile-cardloan
+  name: とちぎんスマイルカードローン
+  company: 株式会社栃木銀行
+  type: bank_regional
+  status: active
+  note: 年6.8〜14.6%・10万〜500万円(公式ページ実測値。比較サイト値と相違あり)
+  pages:
+    top: https://www.tochigibank.co.jp/individual/service/loan/card-smile/
+- product_id: toho-bank-smartnext
+  name: 東邦銀行カードローン「TOHOスマートネクスト」
+  company: 株式会社東邦銀行
+  type: bank_regional
+  status: active
+  note: 年4.8〜14.6%・極度額最高500万円
+  pages:
+    top: https://www.tohobank.co.jp/kojin/loan/card/
+- product_id: tohoku-bank-switch
+  name: 東北銀行カードローン「すいっち」
+  company: 株式会社東北銀行
+  type: bank_regional
+  status: active
+  note: 現行商品名「すいっち」(オリコ保証)。旧名「切り札」は比較サイト残存の旧称
+  pages:
+    top: https://www.tohoku-bank.co.jp/personal/loan/card/
+- product_id: tomato-q-li
+  name: トマト銀行カードローン「Q-Li」
+  company: 株式会社トマト銀行
+  type: bank_regional
+  status: active
+  note: 金利は商品概要PDF別掲
+  pages:
+    top: https://www.tomatobank.co.jp/personal/loan/q-li/index.html
+- product_id: tottori-bank-cardloan
+  name: 鳥取銀行カードローン
+  company: 株式会社鳥取銀行
+  type: bank_regional
+  status: active
+  note: 標準型/一体型/返済口座不要型の3タイプ。旧称「らくだ」は公式ページで未確認
+  pages:
+    top: https://www.tottoribank.co.jp/retail/loan/card/index.html
+- product_id: towa-bank-tonton
+  name: 東和銀行カードローン「とんとん」
+  company: 株式会社東和銀行
+  type: bank_regional
+  status: stopped
+  note: 2025年6月15日で新規申込終了と公式明記。既存契約者向けにページ存続
+  pages:
+    top: https://www.towabank.co.jp/tonton/index.html
+- product_id: toyama-bank-speed-king-max
+  name: 富山銀行カードローン「スピード王MAX」
+  company: 株式会社富山銀行
+  type: bank_regional
+  status: active
+  note: 年4.5-14.6%固定・10-500万円
+  pages:
+    top: https://www.toyamabank.co.jp/pages/kojin/kariru/free/speed.htm
+- product_id: tsukuba-bank-usjoy-alpha
+  name: 筑波銀行カードローン つくばカード「アスジョイアルファ」
+  company: 株式会社筑波銀行
+  type: bank_regional
+  status: active
+  note: 固定年4.8〜14.6%・10万〜500万円。別商品「IMA☆」「USJOY」あり
+  pages:
+    top: https://www.tsukubabank.co.jp/individual/loan/card/
+- product_id: yamagata-bank-cardloan
+  name: 山形銀行カードローン
+  company: 株式会社山形銀行
+  type: bank_regional
+  status: active
+  note: 口座あり型と口座レス型「NEO」の2タイプ。年1.8〜14.6%・最高1,000万円
+  pages:
+    top: https://www.yamagatabank.co.jp/individual/kariru/cardloan/
+- product_id: yamaguchi-mycard-yamaguchikun
+  name: 山口銀行カードローン「マイカード やまぐち君」
+  company: 株式会社山口銀行
+  type: bank_regional
+  status: active
+  note: 固定 年4.5-14.5%
+  pages:
+    top: https://www.yamaguchibank.co.jp/personal/borrow/lp_card/
+- product_id: yamanashi-chuo-bank-wakuwaku-smart
+  name: 山梨中央銀行カードローン「waku waku Smart」
+  company: 株式会社山梨中央銀行
+  type: bank_regional
+  status: active
+  note: 別商品「waku waku エブリ」あり
+  pages:
+    top: https://www.yamanashibank.co.jp/lp/
+- product_id: yokohama-cardloan
+  name: 横浜銀行カードローン
+  company: 株式会社横浜銀行
+  type: bank_regional
+  status: active
+  note: 年1.5-14.6%
+  pages:
+    top: https://www.boy.co.jp/kojin/card-loan/yokohama/index.html
+- product_id: au-pay-smart-loan
+  name: au PAY スマートローン
+  company: auフィナンシャルサービス株式会社
+  type: shinpan
+  status: active
+  note: ⚠旧URL financial.auone.jp/sl/ はDNS消滅。JSレンダリング
+  pages:
+    top: https://loan.kddi-fs.com/
+- product_id: d-sumaho-loan
+  name: dスマホローン
+  company: 株式会社NTTドコモ・フィナンシャルグループ
+  type: shinpan
+  status: active
+  note: ⚠2026-07-01運営会社変更(NTTドコモ→NTTドコモ・フィナンシャルグループ)
+  pages:
+    top: https://www.docomo.ne.jp/service/dsploan/
+- product_id: f-money-card
+  name: Fマネーカード
+  company: ポケットカード株式会社
+  type: shinpan
+  status: active
+  note: Web完結・最短即日借入表記
+  pages:
+    top: https://www.pocketcard.co.jp/card/card_loan_ft.html
+- product_id: famipay-loan
+  name: ファミペイローン
+  company: 株式会社ファミマデジタルワン
+  type: shinpan
+  status: active
+  note: 関東財務局長(2)第01525号
+  pages:
+    top: https://famipay.famidigi.jp/guide/famipayloan/
+- product_id: jcb-card-loan-faith
+  name: JCB CARD LOAN FAITH
+  company: 株式会社ジェーシービー
+  type: shinpan
+  status: active
+  note: 関東財務局長(15)第00183号
+  pages:
+    top: https://www.jcb.co.jp/loancard/faith.html
+- product_id: line-pocket-money
+  name: LINEポケットマネー
+  company: LINE Credit株式会社
+  type: shinpan
+  status: active
+  note: 東京都知事(3)第31721号
+  pages:
+    top: https://linecreditcorp.com/pocketmoney/
+- product_id: merpay-smart-money
+  name: メルペイスマートマネー
+  company: 株式会社メルペイ
+  type: shinpan
+  status: active
+  note: ⚠2026-09-01金利上限15%→18%・限度額80→95万円の変更予告。独立LPなし
+  pages:
+    top: https://help.jp.mercari.com/guide/articles/1107/
+- product_id: orico-crest
+  name: CREST（オリコカードローン）
+  company: 株式会社オリエントコーポレーション
+  type: shinpan
+  status: active
+  pages:
+    top: https://www.orico.co.jp/loan/cardloan/crest/
+- product_id: saison-money-card
+  name: MONEY CARD（セゾン マネーカード）
+  company: 株式会社クレディセゾン
+  type: shinpan
+  status: active
+  note: GOLD あり
+  pages:
+    top: https://loan.saisoncard.co.jp/cards/moneycard.html
+- product_id: smbc-card-cardloan
+  name: 三井住友カード プレミアムカードローン
+  company: 三井住友カード株式会社
+  type: shinpan
+  status: active
+  note: WAFで本文取得不可(curl200+タイトル確認)。旧「カードローン」からの商品改編可能性あり要追認
+  pages:
+    top: https://www.smbc-card.com/nyukai/loan/index.jsp
+- product_id: vip-loan-card
+  name: VIPローンカード
+  company: 株式会社ドコモ・ファイナンス
+  type: shinpan
+  status: active
+  note: 2025-04-01オリックス・クレジット→ドコモ・ファイナンス社名変更。旧ORIX MONEY併記。※セゾンファンデックスの同名商品(停止)とは別物
+  pages:
+    top: https://finance.docomo.ne.jp/sh_vip/
+- product_id: aiful-karikae-max
+  name: アイフル かりかえMAX
+  company: アイフル株式会社
+  type: omatome
+  status: active
+  note: おまとめMAXと同一ページ併記
+  pages:
+    top: https://www.aiful.co.jp/borrow/products/combine/
+- product_id: aiful-omatome-max
+  name: アイフル おまとめMAX
+  company: アイフル株式会社
+  type: omatome
+  status: active
+  note: かりかえMAXと共通ページ。近畿財務局長(15)第00218号
+  pages:
+    top: https://www.aiful.co.jp/borrow/products/combine/
+- product_id: tokyostar-omatome-loan
+  name: 東京スター銀行 おまとめローン（スターワン乗り換えローン）
+  company: 株式会社東京スター銀行
+  type: omatome
+  status: active
+  pages:
+    top: https://www.tokyostarbank.co.jp/products/loan/unsecured_refinance/
+- product_id: airwallet
+  name: エアウォレット
+  company: 株式会社リクルートMUFGビジネス
+  type: bnpl
+  status: active
+  note: ⚠後払い機能なし(チャージ・送金アプリ)。記事の扱い要注意
+  pages:
+    top: https://airwallet.jp/
+- product_id: atone
+  name: atone
+  company: 株式会社ネットプロテクションズ
+  type: bnpl
+  status: active
+  pages:
+    top: https://atone.be/
+- product_id: kyash-imasugu-nyukin
+  name: Kyash イマすぐ入金
+  company: 株式会社Kyash
+  type: bnpl
+  status: active
+  note: 3,000-50,000円・翌月末支払い
+  pages:
+    top: https://www.kyash.co/services/buynowpaylater
+- product_id: mobile-suica
+  name: モバイルSuica
+  company: 東日本旅客鉄道株式会社
+  type: bnpl
+  status: active
+  note: ⚠後払い機能なし(プリペイド式)。公式403(bot遮断)→VPS対象。記事の扱い要注意
+  pages:
+    top: https://www.jreast.co.jp/mobilesuica/
+- product_id: np-atobarai
+  name: NP後払い
+  company: 株式会社ネットプロテクションズ
+  type: bnpl
+  status: active
+  pages:
+    top: https://np-atobarai.jp/
+- product_id: onebank-atobarai-charge
+  name: ワンバンク あとばらいチャージ
+  company: 株式会社スマートバンク
+  type: bnpl
+  status: active
+  note: 2025-03-24 B/43→ワンバンク名称変更
+  pages:
+    top: https://onebank.jp/postpay/mypace/
+- product_id: paidy
+  name: あと払いペイディ（Paidy）
+  company: 株式会社Paidy
+  type: bnpl
+  status: active
+  pages:
+    top: https://paidy.com/
+- product_id: ultra-pay-miraibarai
+  name: ultra pay カード 後払い（ミライバライ）
+  company: 株式会社Yeny
+  type: bnpl
+  status: active
+  note: 後払い提供はAGペイメントサービス。専用LPなし
+  pages:
+    top: https://support.ultra-pay.co.jp/hc/ja/articles/13003491708697
+- product_id: vandle-pochitto-charge
+  name: バンドルカード ポチっとチャージ
+  company: 株式会社カンム
+  type: bnpl
+  status: active
+  pages:
+    top: https://vandle.jp/pochitto/

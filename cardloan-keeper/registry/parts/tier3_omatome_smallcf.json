@@ -1,0 +1,9 @@
+[
+  {"slug": "tokyostar-omatome-loan", "name": "東京スター銀行 おまとめローン（スターワン乗り換えローン）", "company": "株式会社東京スター銀行", "type": "omatome", "official_domain": "www.tokyostarbank.co.jp", "product_url": "https://www.tokyostarbank.co.jp/products/loan/unsecured_refinance/", "status": "active", "note": ""},
+  {"slug": "aiful-omatome-max", "name": "アイフル おまとめMAX", "company": "アイフル株式会社", "type": "omatome", "official_domain": "www.aiful.co.jp", "product_url": "https://www.aiful.co.jp/borrow/products/combine/", "status": "active", "note": "かりかえMAXと共通ページ。近畿財務局長(15)第00218号"},
+  {"slug": "aiful-karikae-max", "name": "アイフル かりかえMAX", "company": "アイフル株式会社", "type": "omatome", "official_domain": "www.aiful.co.jp", "product_url": "https://www.aiful.co.jp/borrow/products/combine/", "status": "active", "note": "おまとめMAXと同一ページ併記"},
+  {"slug": "daily-cashing", "name": "デイリーキャッシング", "company": "株式会社デイリープランニング", "type": "consumer_small", "official_domain": "www.daily-p.co.jp", "product_url": "https://www.daily-p.co.jp/", "status": "active", "note": "東京都知事(3)第31698号。2025-06-27に新規受付再開（過去一時停止）"},
+  {"slug": "t-and-s", "name": "ティー・アンド・エス キャッシング", "company": "株式会社ティー・アンド・エス", "type": "consumer_small", "official_domain": "www.t-s29447.co.jp", "product_url": "https://www.t-s29447.co.jp/", "status": "active", "note": "東京都知事(8)第29447号"},
+  {"slug": "lions-lease", "name": "ライオンズリース キャッシング", "company": "ライオンズリース株式会社", "type": "consumer_small", "official_domain": "www.lionslease.co.jp", "product_url": "https://www.lionslease.co.jp/", "status": "active", "note": "愛知県知事(15)第00595号。名古屋"},
+  {"slug": "momiji-finance", "name": "もみじファイナンス", "company": "もみじ商事株式会社", "type": "consumer_small", "official_domain": "www.momiji24.jp", "product_url": "http://www.momiji24.jp/", "status": "active", "note": "広島県知事(6)第02698号。HTTPのみ配信（HTTPS証明書は共用ホスト名義）"}
+]
