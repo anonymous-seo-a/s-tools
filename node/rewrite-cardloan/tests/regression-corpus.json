@@ -1,0 +1,117 @@
+{
+  "description": "Phase C 回帰コーパス — 過去パトロール指摘・レギュ違反類型。全ケースが L1(決定論) または L3(check_article) で検出されることが実運用開始のゲート。",
+  "cases": [
+    {
+      "id": "acom-zaiseki-isainashi",
+      "products": ["acom"],
+      "text": "アコムは電話による勤務先への在籍確認一切なしです。安心して申し込めます。",
+      "expect": "在籍確認の旧指定表記「一切なし」(掲載基準表20260714で100％なしへ変更)",
+      "origin": "パトロール2026-07-28 アコム100％なし統一"
+    },
+    {
+      "id": "acom-zaiseki-gensoku",
+      "products": ["acom"],
+      "text": "アコムは原則、在籍確認なしで借りられます。",
+      "expect": "アコム公式CSV過去指摘事項「原則、在籍確認なし」",
+      "origin": "アコム公式レギュ表・過去指摘欄"
+    },
+    {
+      "id": "acom-muri-mujouken",
+      "products": ["acom"],
+      "text": "アコムは30日間無利息です。今すぐ申し込みましょう。",
+      "expect": "無利息の起算日(契約翌日)・初回限定条件の欠落 (正式表記違反)",
+      "origin": "master_rules 正式表記 + アコム公式レギュ表"
+    },
+    {
+      "id": "acom-simulation",
+      "products": ["acom"],
+      "text": "アコムで10万円を借りた場合、3年返済なら月々の返済額は約3,400円です。",
+      "expect": "アコム固有: 具体的返済額シミュレーション禁止 (パートナー個別)",
+      "origin": "2026-05-22 E2E検査で判明した原初違反パターン"
+    },
+    {
+      "id": "mobit-web-kanketsu-jouken",
+      "products": ["smbc-mobit"],
+      "text": "SMBCモビットのWEB完結申込は、三井住友銀行・三菱UFJ銀行・みずほ銀行・ゆうちょ銀行いずれかの口座をお持ちの方が対象です。",
+      "expect": "モビット公式: WEB完結の条件記載は削除指定 (完全NG)",
+      "origin": "モビット公式レギュ表 WEB完結申込"
+    },
+    {
+      "id": "mobit-barenai",
+      "products": ["smbc-mobit"],
+      "text": "SMBCモビットなら誰にもバレないので安心です。",
+      "expect": "「誰にもバレない」単体は完全NG (OK形は「WEB完結申込なら誰にもバレない」)",
+      "origin": "モビット公式レギュ表 バレない訴求"
+    },
+    {
+      "id": "shinsa-amai",
+      "products": ["smbc-mobit"],
+      "text": "SMBCモビットは審査が甘いので通りやすいです。",
+      "expect": "L1禁止表現「審査が甘い」+ 審査難易度示唆",
+      "origin": "master_rules 禁止表現 (verified)"
+    },
+    {
+      "id": "black-demo",
+      "products": ["acom"],
+      "text": "ブラックでも借りられるカードローンを紹介します。",
+      "expect": "L1禁止表現「ブラックでも借りられる」",
+      "origin": "master_rules 禁止表現 (verified)"
+    },
+    {
+      "id": "promise-saitan3-mukiji",
+      "products": ["promise"],
+      "text": "プロミスは最短3分融資が可能です。",
+      "expect": "「最短3分」の必須注記 (※お申込時間や審査により〜) 欠落",
+      "origin": "プロミス公式レギュ表 融資時間"
+    },
+    {
+      "id": "promise-muri-mujouken",
+      "products": ["promise"],
+      "text": "プロミスは30日間無利息で借りられます。",
+      "expect": "「30日間無利息」条件文言なしは完全NG (OK形=初回30日間無利息※メール登録とWeb明細利用の登録が必要)",
+      "origin": "プロミス公式レギュ表 無利息"
+    },
+    {
+      "id": "lake-saitan15-kyuchi",
+      "products": ["lake"],
+      "text": "レイクなら最短15分で審査が完了します。",
+      "expect": "旧値「最短15分」(2026-06-26に最短10分へ改定済) — レイク公式レギュ未受領のため検出できない場合はギャップとして記録",
+      "origin": "パトロール2026-06-26 レイク最短15分→10分"
+    },
+    {
+      "id": "ui-plan-kosho",
+      "products": ["uibank-ui-plan"],
+      "text": "UI銀行カードローンは金利が低くおすすめです。",
+      "expect": "UI銀行の公式呼称は「UI Plan(スマホローン)」— 「カードローン」呼称は掲載基準違反",
+      "origin": "掲載基準表 (銀行カードローンおすすめ11092)"
+    },
+    {
+      "id": "minna-shufu",
+      "products": ["minna-no-ginko-loan"],
+      "text": "みんなの銀行Loanは専業主婦でも申し込めます。",
+      "expect": "みんなの銀行は専業主婦(夫)申込不可 (掲載基準実績)",
+      "origin": "掲載基準表 (銀行カードローンおすすめ11092)"
+    },
+    {
+      "id": "jougen-pick-hikaku",
+      "products": ["acom", "promise"],
+      "text": "アコムの上限金利18.0%はプロミスの上限金利17.8%より高いため、プロミスの方がお得です。",
+      "expect": "上限金利のみのピック比較 (比較構造禁止・優良/有利誤認)",
+      "origin": "2026-05-22 E2E検査で判明した原初違反パターン (Layer2)"
+    },
+    {
+      "id": "bank-sokujitsu",
+      "products": ["rakuten-super-loan"],
+      "text": "楽天銀行スーパーローンなら即日融資が可能です。",
+      "expect": "銀行カードローンは即日融資不可 (2018年以降の警察庁DB照会)",
+      "origin": "A-3 inferred 銀行セクション"
+    },
+    {
+      "id": "kakujitsu-yushi",
+      "products": ["aiful"],
+      "text": "アイフルなら確実融資で必ず借りられます。",
+      "expect": "L1禁止表現「確実融資」+ 融資可否の断定",
+      "origin": "master_rules 禁止表現 (verified) + アイフル公式レギュ"
+    }
+  ]
+}
