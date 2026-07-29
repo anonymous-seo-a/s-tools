@@ -45,10 +45,21 @@ def api_sources():
     return sorted(agg.values(), key=lambda x: (x["tier"], -x["chunks"]))
 
 
+def _fixenc(s):
+    """http.server はリクエスト行を latin-1 で読むため、生UTF-8のURL（curl等）が
+    化ける。latin-1 往復で UTF-8 に復元できる場合のみ復元する（browser の
+    percent-encoded は素通し）。"""
+    try:
+        fixed = s.encode("latin-1").decode("utf-8")
+        return fixed
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
 def api_regstore(params):
-    q = (params.get("q") or [""])[0]
+    q = _fixenc((params.get("q") or [""])[0])
     pid = (params.get("product") or [""])[0]
-    src = (params.get("source") or [""])[0]
+    src = _fixenc((params.get("source") or [""])[0])
     if q and pid:
         res = regstore.query([p.strip() for p in pid.split(",")], q, k=12)
         return [{"context": c["context"], "text": c["text"], "tier": c["source_tier"],
