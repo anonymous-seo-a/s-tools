@@ -300,6 +300,16 @@ def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "build":
         return build()
     if len(sys.argv) >= 4 and sys.argv[1] == "query":
+        as_json = "--json" in sys.argv
+        args = [a for a in sys.argv if a != "--json"]
+        if as_json:
+            # keeper-bridge (rewrite-cardloan L0注入) 用の機械可読出力
+            pids = [c.strip() for c in args[2].split(",") if c.strip()]
+            res = query(pids, args[3], k=8)
+            print(json.dumps([{"context": c["context"], "text": c["text"][:600],
+                               "tier": c["source_tier"], "source": c["source"]}
+                              for c in res], ensure_ascii=False))
+            return 0
         products = {p["product_id"]: p for p in load_registry()}
         res = query(sys.argv[2], sys.argv[3])
         product = products.get(sys.argv[2], {})
