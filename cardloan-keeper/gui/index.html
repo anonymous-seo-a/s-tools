@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cardloan-keeper 管制盤</title>
+<style>
+  :root { --navy:#1a3a5c; --gold:#d4a000; --bg:#f6f7f9; --line:#dde3ea; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif; background:var(--bg); color:#1d2733; }
+  header { background:var(--navy); color:#fff; padding:10px 18px; display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:15px; margin:0; font-weight:700; }
+  header .sub { font-size:11px; opacity:.75; }
+  nav { display:flex; gap:2px; background:var(--navy); padding:0 12px; }
+  nav button { border:0; padding:8px 14px; font-size:13px; cursor:pointer; background:transparent; color:#cdd8e4; border-radius:6px 6px 0 0; }
+  nav button.on { background:var(--bg); color:var(--navy); font-weight:700; }
+  main { padding:14px 18px; max-width:1180px; margin:0 auto; }
+  .panel { display:none; } .panel.on { display:block; }
+  input,textarea,select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; }
+  textarea { width:100%; min-height:140px; }
+  button.act { background:var(--navy); color:#fff; border:0; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:13px; }
+  table { border-collapse:collapse; width:100%; background:#fff; font-size:12.5px; }
+  th,td { border:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:#eef2f6; position:sticky; top:0; }
+  .tier-official { color:#0a7a3d; font-weight:700; } .tier-inferred { color:#9a6b00; font-weight:700; }
+  .chunk { background:#fff; border:1px solid var(--line); border-left:4px solid var(--gold); border-radius:6px; padding:10px 12px; margin:8px 0; }
+  .chunk .ctx { font-weight:700; font-size:12.5px; margin-bottom:4px; }
+  .chunk pre { white-space:pre-wrap; margin:0; font:12px/1.6 inherit; }
+  .v-high { border-left-color:#c0392b; } .v-medium { border-left-color:#e67e22; } .v-low { border-left-color:#7f8c8d; }
+  .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:99px; background:#e8edf3; margin-right:6px; }
+  .stopped { color:#c0392b; font-weight:700; } .unverified { color:#9a6b00; }
+  .muted { color:#6b7684; font-size:12px; }
+  pre.digest { background:#101820; color:#c8d4e0; padding:12px; border-radius:8px; font-size:11.5px; overflow:auto; max-height:60vh; }
+  .bar { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; align-items:center; }
+</style>
+</head>
+<body>
+<header><h1>cardloan-keeper 管制盤</h1><span class="sub" id="stat">読込中…</span></header>
+<nav>
+  <button data-p="products" class="on">商材レジストリ</button>
+  <button data-p="reg">レギュレーション</button>
+  <button data-p="check">記事チェック</button>
+  <button data-p="snap">スナップショット</button>
+</nav>
+<main>
+  <section id="p-products" class="panel on">
+    <div class="bar">
+      <input id="pq" placeholder="絞り込み (名称・会社・ID)" style="width:280px">
+      <select id="ptype"><option value="">全種別</option></select>
+      <select id="pstatus"><option value="">全状態</option><option>active</option><option>stopped</option><option>unverified</option></select>
+    </div>
+    <table id="ptable"><thead><tr><th>product_id</th><th>商材名</th><th>会社</th><th>種別</th><th>状態</th><th>備考</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="p-reg" class="panel">
+    <div class="bar">
+      <input id="rq" placeholder="検索語 (例: 在籍確認)" style="width:240px">
+      <input id="rpid" placeholder="商材IDでBM25検索 (例: acom,aiful)" style="width:260px">
+      <select id="rsrc"><option value="">出典で絞る…</option></select>
+      <button class="act" onclick="loadReg()">検索</button>
+      <span class="muted">商材ID入力時はスコープ付きBM25、未入力時は全文絞り込み</span>
+    </div>
+    <div id="rlist"></div>
+  </section>
+
+  <section id="p-check" class="panel">
+    <p class="muted">記事ドラフトを規制ストア（公式CSV＋推定＋法令原文）に照らして違反候補を検出します（Opus使用・十数秒）。商材は本文から自動検出。</p>
+    <textarea id="ctext" placeholder="記事本文を貼り付け"></textarea>
+    <div class="bar"><button class="act" onclick="runCheck()">チェック実行</button><span id="cstat" class="muted"></span></div>
+    <div id="cres"></div>
+  </section>
+
+  <section id="p-snap" class="panel">
+    <div id="sinfo" class="bar muted"></div>
+    <pre class="digest" id="sdigest">（日次 04:30 JST の snapshot ダイジェスト）</pre>
+  </section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+let PRODUCTS = [];
+
+document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach((x) => x.classList.remove('on'));
+  document.querySelectorAll('.panel').forEach((x) => x.classList.remove('on'));
+  b.classList.add('on'); $('#p-' + b.dataset.p).classList.add('on');
+});
+
+async function j(url, opt) { const r = await fetch(url, opt); return r.json(); }
+
+function renderProducts() {
+  const q = $('#pq').value.trim(), t = $('#ptype').value, st = $('#pstatus').value;
+  const rows = PRODUCTS.filter((p) =>
+    (!t || p.type === t) && (!st || p.status === st) &&
+    (!q || (p.product_id + p.name + (p.company || '')).includes(q)));
+  $('#ptable tbody').innerHTML = rows.map((p) => {
+    const url = p.pages && p.pages.top ? `<a href="${p.pages.top}" target="_blank">${p.name}</a>` : p.name;
+    return `<tr><td>${p.product_id}</td><td>${url}</td><td>${p.company || ''}</td><td>${p.type}</td>` +
+      `<td class="${p.status}">${p.status}</td><td class="muted">${(p.note || '').slice(0, 60)}</td></tr>`;
+  }).join('');
+  $('#stat').textContent = `${PRODUCTS.length}商材 (表示${rows.length}) / active ${PRODUCTS.filter((p) => p.status === 'active').length}・stopped ${PRODUCTS.filter((p) => p.status === 'stopped').length}`;
+}
+
+function renderChunks(el, rows) {
+  el.innerHTML = rows.length ? rows.map((c) =>
+    `<div class="chunk"><div class="ctx"><span class="tier-${c.tier === 'client_official' ? 'official' : 'inferred'}">${c.tier === 'client_official' ? '公式' : '推定'}</span> ${c.context}</div><pre>${esc(c.text)}</pre></div>`
+  ).join('') : '<p class="muted">該当なし</p>';
+}
+function esc(s) { return String(s).replace(/[&<>]/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
+
+async function loadReg() {
+  const q = encodeURIComponent($('#rq').value.trim());
+  const pid = encodeURIComponent($('#rpid').value.trim());
+  const src = encodeURIComponent($('#rsrc').value);
+  renderChunks($('#rlist'), await j(`/api/regstore?q=${q}&product=${pid}&source=${src}`));
+}
+
+async function runCheck() {
+  $('#cstat').textContent = '検査中… (LLM呼び出し)';
+  $('#cres').innerHTML = '';
+  try {
+    const res = await j('/api/check', { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: $('#ctext').value }) });
+    if (res.error) { $('#cstat').textContent = 'エラー: ' + res.error; return; }
+    $('#cstat').textContent = `対象: ${(res.product_ids || []).join(', ')} / 照合${res.rules_checked}ルール / 違反候補${res.violations.length}件`;
+    $('#cres').innerHTML =
+      `<div class="chunk"><div class="ctx">総評</div><pre>${esc(res.overall || '')}</pre></div>` +
+      res.violations.map((v) =>
+        `<div class="chunk v-${v.severity}"><div class="ctx">[${v.severity.toUpperCase()}] 「${esc(v.excerpt)}」</div>` +
+        `<pre>抵触: ${esc(v.source)} (${v.tier})\nなぜ: ${esc(v.why)}\n修正: ${esc(v.suggested_fix)}</pre></div>`).join('');
+  } catch (e) { $('#cstat').textContent = '実行失敗: ' + e; }
+}
+
+(async () => {
+  PRODUCTS = await j('/api/products');
+  const types = [...new Set(PRODUCTS.map((p) => p.type))];
+  $('#ptype').innerHTML += types.map((t) => `<option>${t}</option>`).join('');
+  ['pq', 'ptype', 'pstatus'].forEach((id) => $('#' + id).oninput = renderProducts);
+  renderProducts();
+  const sources = await j('/api/sources');
+  $('#rsrc').innerHTML += sources.map((s) => `<option value="${s.source}">[${s.tier === 'client_official' ? '公式' : '推定'}] ${s.source} (${s.chunks})</option>`).join('');
+  const snap = await j('/api/snapshot');
+  $('#sinfo').textContent = `snapshot保有: ${snap.products_with_snapshots}商材 / ${snap.pages}ページ / 最新ダイジェスト: ${snap.digest_file || 'なし'}`;
+  if (snap.digest) $('#sdigest').textContent = snap.digest;
+})();
+</script>
+</body>
+</html>
