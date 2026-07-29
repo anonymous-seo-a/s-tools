@@ -1,2 +1,170 @@
 acom:
-  company_match: ["アコム", "acom"]
+  company_match:
+  - アコム
+  - acom
+aeonbank-cardloan:
+  product_ids:
+  - aeonbank-cardloan
+au-pay-smart-loan:
+  product_ids:
+  - au-pay-smart-loan
+bnpl_charge:
+  product_ids:
+  - airwallet
+  - atone
+  - kyash-imasugu-nyukin
+  - mobile-suica
+  - np-atobarai
+  - onebank-atobarai-charge
+  - paidy
+  - ultra-pay-miraibarai
+  - vandle-pochitto-charge
+d-sumaho-loan:
+  product_ids:
+  - d-sumaho-loan
+f-money-card:
+  product_ids:
+  - f-money-card
+famipay-loan:
+  product_ids:
+  - famipay-loan
+jcb-card-loan-faith:
+  product_ids:
+  - jcb-card-loan-faith
+jibun-loan:
+  product_ids:
+  - jibun-loan
+line-pocket-money:
+  product_ids:
+  - line-pocket-money
+merpay-smart-money:
+  product_ids:
+  - merpay-smart-money
+minna-no-ginko-loan:
+  product_ids:
+  - minna-no-ginko-loan
+mizuho-cardloan:
+  product_ids:
+  - mizuho-cardloan
+mufg-banquic:
+  product_ids:
+  - mufg-banquic
+omatome:
+  product_ids:
+  - aiful-karikae-max
+  - aiful-omatome-max
+  - tokyostar-omatome-loan
+orico-crest:
+  product_ids:
+  - orico-crest
+orixbank-cardloan:
+  product_ids:
+  - orixbank-cardloan
+paypay-cardloan:
+  product_ids:
+  - paypay-cardloan
+rakuten-super-loan:
+  product_ids:
+  - rakuten-super-loan
+regional_banks:
+  product_ids:
+  - 18shinwa-cardloan
+  - 77-cardloan
+  - 82-new-mighty
+  - aichi-bank-cardloan-ai
+  - akita-bank-smartnext
+  - aomori-michinoku-cardloan
+  - ashikaga-moshica
+  - awa-bank-smartnext
+  - chibagin-quick-power-advance
+  - chibakogyo-bank-anshin-up
+  - dhbk-asca
+  - fukuho-bank-cardloan
+  - fukui-bank-cardloan
+  - fukuoka-cardloan
+  - fukushima-bank-fukugin-cardloan
+  - gungin-smile-partner
+  - higo-bank-web-cardloan
+  - himegin-quick-cardloan
+  - hirogin-mylifeplus-card
+  - hokkaido-rapid
+  - hokkoku-day-smart
+  - hokuriku-bank-super-now
+  - hokuto-bank-super-assist-cardloan
+  - hokuyo-super-arca
+  - hyakugo-bank-mycard-dream
+  - iyo-bank-new-speed-cardloan
+  - joyo-cashpit
+  - juroku-bank-q-loan
+  - kagawa-bank-papatto-card
+  - kagoshima-bank-cardloan-s
+  - kanagawa-bank-my-support
+  - kansaimirai-cardloan
+  - keiyo-bank-cardloan
+  - kiraboshi-cardloan
+  - kiyo-bank-cardloan-plus
+  - kochi-bank-cardloan
+  - kumamoto-bank-cardloan
+  - kyoto-bank-cardloan-direct
+  - kyoto-chushin-castle
+  - minato-bank-cardloan
+  - miyagin-omakasekun
+  - nagasaki-bank-premier-a
+  - nagoya-bank-cardloan
+  - nanto-cardloan
+  - ncb-app-cardloan
+  - ogaki-kyoritsu-bank-the-maximum
+  - oita-bank-cardloan
+  - okinawa-bank-checkit
+  - ryukyu-bank-shiawase-cardloan
+  - saga-cardloan
+  - sanjusan-bank-cardloan
+  - sendai-cardloan-neo
+  - shikoku-bank-cardloan-4s
+  - shizuoka-seleca
+  - tajima-bank-cardloan
+  - tochigi-bank-smile-cardloan
+  - toho-bank-smartnext
+  - tohoku-bank-switch
+  - tomato-q-li
+  - tottori-bank-cardloan
+  - towa-bank-tonton
+  - toyama-bank-speed-king-max
+  - tsukuba-bank-usjoy-alpha
+  - yamagata-bank-cardloan
+  - yamaguchi-mycard-yamaguchikun
+  - yamanashi-chuo-bank-wakuwaku-smart
+  - yokohama-cardloan
+resona-cardloan:
+  product_ids:
+  - resona-cardloan
+saison-money-card:
+  product_ids:
+  - saison-money-card
+sbi-sumishin-cardloan:
+  product_ids:
+  - sbi-sumishin-cardloan
+sevenbank-loan-service:
+  product_ids:
+  - sevenbank-loan-service
+smbc-card-cardloan:
+  product_ids:
+  - smbc-card-cardloan
+smbc-cardloan:
+  product_ids:
+  - smbc-cardloan
+sonybank-cardloan:
+  product_ids:
+  - sonybank-cardloan
+suruga-cardloan:
+  product_ids:
+  - suruga-cardloan
+tokyostar-cardloan-alpha:
+  product_ids:
+  - tokyostar-cardloan-alpha
+uibank-ui-plan:
+  product_ids:
+  - uibank-ui-plan
+vip-loan-card:
+  product_ids:
+  - vip-loan-card
