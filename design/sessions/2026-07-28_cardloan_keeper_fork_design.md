@@ -102,6 +102,12 @@ s-tools/
   - 移植: fetch三段 / snapshot差分 / regstore（129チャンク稼働）/ check_article（--json出力=L3ゲート接続点）/ ingest_law（8法令、利息制限法・出資法・銀行法を追加）
   - センサス副産物: 停止5商材・商号/運営会社変更・URL移転など鮮度案件を多数検出（詳細はメモリ project-cardloan-keeper-rewrite）
 
+## 6.5 Phase B/C 完了（2026-07-29 追記）
+
+- **Phase B**: node/rewrite-cardloan = 完全フォーク本番稼働（pm2 rewrite-cardloan :3002・rewrite-cardloan.db・本家不可触）。keeper-bridge 4層防御結線（L0プロンプト注入/L1 draft同期73件/L2継承/L3 fail-closedゲート）。safe-cell学習無効・auto-batch無効・cardloan専用ガード
+- **Phase C 合格**: 回帰コーパス16ケース → **16/16検出**（tests/regression-corpus.json）。実運用可能状態
+- 運用注意: push自動デプロイは本家のみ再起動 → フォーク更新時は `pm2 restart rewrite-cardloan` 手動
+
 ## 7. 未決
 
 - keeper 本番配置先: promise.co.jp TCP遮断・みずほ/レイク等403のため日本IP VPS + Playwright 必須。fact-keeper VPS 相乗り vs s-tools 本番VPS(133.88.118.55) vs 新規
