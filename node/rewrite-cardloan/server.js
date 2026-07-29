@@ -9,7 +9,13 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 const express = require('express');
 const path = require('path');
 
+// masters UI (rewrite-client「マスター」タブ) をフォークDBに向ける。
+// master-db.js は MASTER_DB_PATH を require 時に解決するため、require より前に設定する。
+process.env.MASTER_DB_PATH = process.env.MASTER_DB_PATH
+  || path.join(__dirname, '..', 'data', 'rewrite-cardloan.db');
+
 const { initSchema, DB_PATH } = require('./db');
+const mastersRoutes = require('../masters-routes');
 const judgmentApi = require('./api/judgment');
 const queueApi = require('./api/queue');
 const measurementApi = require('./api/measurement');
@@ -25,6 +31,7 @@ app.use(express.json({ limit: '8mb' }));
 const clientDist = path.join(__dirname, '..', 'rewrite-client', 'dist');
 app.use('/rewrite', express.static(clientDist));
 
+app.use('/api/masters', mastersRoutes);
 app.use('/api/rewrite/judgment', judgmentApi.buildRouter());
 app.use('/api/rewrite/measurement', measurementApi.buildRouter());
 app.use('/api/rewrite/aff-clicks', affClicksApi.buildRouter());
