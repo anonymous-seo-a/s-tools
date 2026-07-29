@@ -5,113 +5,224 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>cardloan-keeper 管制盤</title>
 <style>
-  :root { --navy:#1a3a5c; --gold:#d4a000; --bg:#f6f7f9; --line:#dde3ea; }
+  :root { --navy:#1a3a5c; --gold:#d4a000; --green:#2a7a48; --bg:#f6f7f9; --line:#dde3ea; }
   * { box-sizing:border-box; }
   body { margin:0; font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif; background:var(--bg); color:#1d2733; }
   header { background:var(--navy); color:#fff; padding:10px 18px; display:flex; align-items:center; gap:14px; }
   header h1 { font-size:15px; margin:0; font-weight:700; }
-  header .sub { font-size:11px; opacity:.75; }
-  nav { display:flex; gap:2px; background:var(--navy); padding:0 12px; }
-  nav button { border:0; padding:8px 14px; font-size:13px; cursor:pointer; background:transparent; color:#cdd8e4; border-radius:6px 6px 0 0; }
+  header .sub { font-size:11px; opacity:.8; }
+  nav { display:flex; gap:2px; background:var(--navy); padding:0 12px; flex-wrap:wrap; }
+  nav button { border:0; padding:8px 13px; font-size:13px; cursor:pointer; background:transparent; color:#cdd8e4; border-radius:6px 6px 0 0; }
   nav button.on { background:var(--bg); color:var(--navy); font-weight:700; }
-  main { padding:14px 18px; max-width:1180px; margin:0 auto; }
+  main { padding:14px 18px; max-width:1280px; margin:0 auto; }
   .panel { display:none; } .panel.on { display:block; }
   input,textarea,select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; }
-  textarea { width:100%; min-height:140px; }
+  textarea { width:100%; min-height:130px; }
   button.act { background:var(--navy); color:#fff; border:0; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:13px; }
+  button.mini { background:#eef2f6; border:1px solid var(--line); padding:3px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
   table { border-collapse:collapse; width:100%; background:#fff; font-size:12.5px; }
   th,td { border:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
-  th { background:#eef2f6; position:sticky; top:0; }
+  th { background:#eef2f6; position:sticky; top:0; z-index:1; }
+  tr.clickable { cursor:pointer; } tr.clickable:hover { background:#f0f5fa; }
   .tier-official { color:#0a7a3d; font-weight:700; } .tier-inferred { color:#9a6b00; font-weight:700; }
   .chunk { background:#fff; border:1px solid var(--line); border-left:4px solid var(--gold); border-radius:6px; padding:10px 12px; margin:8px 0; }
   .chunk .ctx { font-weight:700; font-size:12.5px; margin-bottom:4px; }
-  .chunk pre { white-space:pre-wrap; margin:0; font:12px/1.6 inherit; }
+  .chunk pre { white-space:pre-wrap; margin:0; font:12px/1.65 inherit; }
   .v-high { border-left-color:#c0392b; } .v-medium { border-left-color:#e67e22; } .v-low { border-left-color:#7f8c8d; }
   .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:99px; background:#e8edf3; margin-right:6px; }
   .stopped { color:#c0392b; font-weight:700; } .unverified { color:#9a6b00; }
   .muted { color:#6b7684; font-size:12px; }
-  pre.digest { background:#101820; color:#c8d4e0; padding:12px; border-radius:8px; font-size:11.5px; overflow:auto; max-height:60vh; }
+  pre.digest { background:#101820; color:#c8d4e0; padding:12px; border-radius:8px; font-size:11.5px; overflow:auto; max-height:52vh; }
   .bar { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; align-items:center; }
+  .meter { display:inline-block; width:74px; height:9px; background:#e2e8ef; border-radius:6px; overflow:hidden; vertical-align:middle; }
+  .meter i { display:block; height:100%; background:linear-gradient(90deg,var(--green),#57b87d); }
+  .meter.low i { background:linear-gradient(90deg,#c0392b,#e67e22); }
+  /* 詳細ドロワー */
+  #drawer { position:fixed; top:0; right:-720px; width:min(700px,95vw); height:100vh; background:#fff;
+            box-shadow:-6px 0 24px rgba(0,0,0,.18); transition:right .22s; overflow-y:auto; z-index:50; }
+  #drawer.on { right:0; }
+  #drawer .head { background:var(--navy); color:#fff; padding:14px 18px; position:sticky; top:0; z-index:2; }
+  #drawer .head h2 { margin:0 0 4px; font-size:16px; }
+  #drawer .body { padding:14px 18px; }
+  .fact { border:1px solid var(--line); border-left:4px solid var(--green); border-radius:6px; background:#fff; padding:9px 12px; margin:8px 0; }
+  .fact.unstated { border-left-color:#9aa6b2; background:#fafbfc; }
+  .fact .k { font-weight:700; font-size:12.5px; }
+  .fact .v { font-size:13px; margin:3px 0; }
+  .fact .meta { font-size:11px; color:#6b7684; }
+  .fact .conds { font-size:11.5px; color:#7a5b00; background:#fffbe6; border-radius:4px; padding:4px 8px; margin-top:4px; }
+  .fact .hist { font-size:11px; color:#8a2b2b; margin-top:4px; }
+  .chat { display:flex; flex-direction:column; gap:8px; }
+  .msg { max-width:85%; padding:9px 12px; border-radius:10px; font-size:13px; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; background:var(--navy); color:#fff; }
+  .msg.ai { align-self:flex-start; background:#fff; border:1px solid var(--line); }
+  .cmp-sel { background:#fff; border:1px solid var(--line); border-radius:6px; padding:8px; max-height:180px; overflow:auto; columns:3; font-size:12px; }
 </style>
 </head>
 <body>
 <header><h1>cardloan-keeper 管制盤</h1><span class="sub" id="stat">読込中…</span></header>
 <nav>
-  <button data-p="products" class="on">商材レジストリ</button>
+  <button data-p="products" class="on">商材</button>
+  <button data-p="cmp">比較</button>
   <button data-p="reg">レギュレーション</button>
   <button data-p="check">記事チェック</button>
+  <button data-p="law">制度知識</button>
+  <button data-p="chat">保持者チャット</button>
   <button data-p="snap">スナップショット</button>
 </nav>
 <main>
   <section id="p-products" class="panel on">
     <div class="bar">
-      <input id="pq" placeholder="絞り込み (名称・会社・ID)" style="width:280px">
+      <input id="pq" placeholder="絞り込み (名称・会社・ID)" style="width:260px">
       <select id="ptype"><option value="">全種別</option></select>
       <select id="pstatus"><option value="">全状態</option><option>active</option><option>stopped</option><option>unverified</option></select>
+      <span class="muted">行クリックで詳細（facts 4点セット）</span>
     </div>
-    <table id="ptable"><thead><tr><th>product_id</th><th>商材名</th><th>会社</th><th>種別</th><th>状態</th><th>備考</th></tr></thead><tbody></tbody></table>
+    <table id="ptable"><thead><tr><th>product_id</th><th>商材名</th><th>会社</th><th>種別</th><th>状態</th><th>充足率</th><th>抽出</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="p-cmp" class="panel">
+    <p class="muted">比較する商材にチェック（最大6）→ 比較表を生成。値は保持factsの書き下し＋条件。</p>
+    <div class="cmp-sel" id="cmpsel"></div>
+    <div class="bar"><button class="act" onclick="runCompare()">比較表を生成</button></div>
+    <div id="cmpout" style="overflow-x:auto"></div>
   </section>
 
   <section id="p-reg" class="panel">
     <div class="bar">
-      <input id="rq" placeholder="検索語 (例: 在籍確認)" style="width:240px">
-      <input id="rpid" placeholder="商材IDでBM25検索 (例: acom,aiful)" style="width:260px">
+      <input id="rq" placeholder="検索語 (例: 在籍確認)" style="width:220px">
+      <input id="rpid" placeholder="商材IDでBM25 (例: acom,aiful)" style="width:230px">
       <select id="rsrc"><option value="">出典で絞る…</option></select>
       <button class="act" onclick="loadReg()">検索</button>
-      <span class="muted">商材ID入力時はスコープ付きBM25、未入力時は全文絞り込み</span>
     </div>
     <div id="rlist"></div>
   </section>
 
   <section id="p-check" class="panel">
-    <p class="muted">記事ドラフトを規制ストア（公式CSV＋推定＋法令原文）に照らして違反候補を検出します（Opus使用・十数秒）。商材は本文から自動検出。</p>
+    <p class="muted">記事ドラフトを規制ストア（公式CSV＋推定＋法令原文）に照合（Opus・十数秒）。商材は本文から自動検出。</p>
     <textarea id="ctext" placeholder="記事本文を貼り付け"></textarea>
     <div class="bar"><button class="act" onclick="runCheck()">チェック実行</button><span id="cstat" class="muted"></span></div>
     <div id="cres"></div>
   </section>
 
+  <section id="p-law" class="panel">
+    <div class="bar">
+      <input id="lq" placeholder="条文検索 (例: 誇大広告 / 在籍 / 利息)" style="width:280px">
+      <button class="act" onclick="loadLaws()">検索</button>
+      <span class="muted">8法令の条文原文 (e-Gov)</span>
+    </div>
+    <div id="llist"></div>
+  </section>
+
+  <section id="p-chat" class="panel">
+    <p class="muted">保持者エージェント: 保持facts・レギュ・法令だけを根拠に回答（出典・確認日付き）。</p>
+    <div class="chat" id="chatlog"></div>
+    <div class="bar">
+      <input id="chatin" placeholder="例: アコムの無利息の条件は？ / 在籍確認なしと書いていい？" style="flex:1" onkeydown="if(event.key==='Enter')sendChat()">
+      <button class="act" onclick="sendChat()">送信</button><span id="chatstat" class="muted"></span>
+    </div>
+  </section>
+
   <section id="p-snap" class="panel">
     <div id="sinfo" class="bar muted"></div>
-    <pre class="digest" id="sdigest">（日次 04:30 JST の snapshot ダイジェスト）</pre>
+    <h4 style="margin:8px 0 4px">日次差分ダイジェスト</h4>
+    <pre class="digest" id="sdigest">（未生成）</pre>
+    <h4 style="margin:8px 0 4px">facts パイプライン進捗</h4>
+    <pre class="digest" id="spipe">（未実行）</pre>
   </section>
 </main>
+
+<div id="drawer">
+  <div class="head">
+    <button class="mini" style="float:right" onclick="$('#drawer').classList.remove('on')">閉じる ✕</button>
+    <h2 id="d-title">—</h2>
+    <div class="sub" id="d-sub"></div>
+  </div>
+  <div class="body" id="d-body"></div>
+</div>
+
 <script>
 const $ = (s) => document.querySelector(s);
 let PRODUCTS = [];
+const CHAT = [];
 
 document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
   document.querySelectorAll('nav button').forEach((x) => x.classList.remove('on'));
   document.querySelectorAll('.panel').forEach((x) => x.classList.remove('on'));
   b.classList.add('on'); $('#p-' + b.dataset.p).classList.add('on');
 });
-
 async function j(url, opt) { const r = await fetch(url, opt); return r.json(); }
+function esc(s) { return String(s ?? '').replace(/[&<>]/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
+function meter(cov) {
+  const cls = cov.pct < 50 ? 'meter low' : 'meter';
+  return `<span class="${cls}"><i style="width:${cov.pct}%"></i></span> <span class="muted">${cov.pct}% (${cov.have}+${cov.unstated}記載なし/${cov.total})</span>`;
+}
 
 function renderProducts() {
   const q = $('#pq').value.trim(), t = $('#ptype').value, st = $('#pstatus').value;
   const rows = PRODUCTS.filter((p) =>
     (!t || p.type === t) && (!st || p.status === st) &&
     (!q || (p.product_id + p.name + (p.company || '')).includes(q)));
-  $('#ptable tbody').innerHTML = rows.map((p) => {
-    const url = p.pages && p.pages.top ? `<a href="${p.pages.top}" target="_blank">${p.name}</a>` : p.name;
-    return `<tr><td>${p.product_id}</td><td>${url}</td><td>${p.company || ''}</td><td>${p.type}</td>` +
-      `<td class="${p.status}">${p.status}</td><td class="muted">${(p.note || '').slice(0, 60)}</td></tr>`;
-  }).join('');
-  $('#stat').textContent = `${PRODUCTS.length}商材 (表示${rows.length}) / active ${PRODUCTS.filter((p) => p.status === 'active').length}・stopped ${PRODUCTS.filter((p) => p.status === 'stopped').length}`;
+  $('#ptable tbody').innerHTML = rows.map((p) =>
+    `<tr class="clickable" onclick="openDetail('${p.product_id}')">` +
+    `<td>${p.product_id}</td><td>${esc(p.name)}</td><td>${esc(p.company || '')}</td>` +
+    `<td>${p.type}</td><td class="${p.status}">${p.status}</td>` +
+    `<td>${meter(p.coverage)}</td>` +
+    `<td class="muted">${p.extracted_at ? p.extracted_at.slice(0, 10) : '未抽出'}</td></tr>`).join('');
+  const done = PRODUCTS.filter((p) => p.extracted_at).length;
+  $('#stat').textContent = `${PRODUCTS.length}商材 / facts抽出済 ${done} / active ${PRODUCTS.filter((p) => p.status === 'active').length}・stopped ${PRODUCTS.filter((p) => p.status === 'stopped').length}`;
+}
+
+async function openDetail(pid) {
+  const d = await j('/api/product/' + pid);
+  if (d.error) return alert(d.error);
+  const p = d.product;
+  $('#d-title').textContent = p.name;
+  $('#d-sub').innerHTML = `${esc(p.company || '')} / ${p.type} / <b>${p.status}</b> ・ 充足率 ${d.coverage.pct}% ・ 抽出 ${d.extracted_at ? d.extracted_at.slice(0, 16).replace('T', ' ') : '未'}`;
+  const live = d.facts.filter((f) => f.status !== 'absent_in_latest');
+  const retired = d.facts.length - live.length;
+  $('#d-body').innerHTML =
+    (p.note ? `<p class="muted">備考: ${esc(p.note)}</p>` : '') +
+    `<h3 style="margin:6px 0">保持facts（4点セット）</h3>` +
+    (live.length ? live.map((f) =>
+      `<div class="fact${f.unstated ? ' unstated' : ''}">` +
+      `<div class="k">${esc(f.label)} <span class="pill">${f.confidence}</span>${f.history.length ? `<span class="pill" style="background:#fde8e8">履歴${f.history.length}</span>` : ''}</div>` +
+      `<div class="v">${esc(f.human)}</div>` +
+      (f.conditions.length ? `<div class="conds">条件・注記: ${f.conditions.map(esc).join(' / ')}</div>` : '') +
+      `<div class="meta">出典: <a href="${f.source_url}" target="_blank">${esc((f.source_url || '').slice(0, 60))}</a> ・ 確認 ${esc((f.verified_at || '').slice(0, 16).replace('T', ' '))}</div>` +
+      f.history.map((h) => `<div class="hist">変更 ${esc((h.changed_at || '').slice(0, 10))}: ${esc(JSON.stringify(h.old_value).slice(0, 60))} → ${esc(JSON.stringify(h.new_value).slice(0, 60))}</div>`).join('') +
+      `</div>`).join('') : '<p class="muted">facts 未抽出（パイプライン実行待ち）</p>') +
+    (retired ? `<p class="muted">引退facts (absent_in_latest): ${retired}件</p>` : '') +
+    (d.extraction_notes ? `<div class="chunk"><div class="ctx">抽出メモ（省略理由・矛盾の記録）</div><pre>${esc(d.extraction_notes)}</pre></div>` : '') +
+    `<h3 style="margin:14px 0 4px">スナップショット</h3>` +
+    (d.snapshots.length ? `<table><tr><th>役割</th><th>URL</th><th>取得</th><th>文字数</th></tr>` +
+      d.snapshots.map((s) => `<tr><td>${s.role}</td><td><a href="${s.url}" target="_blank">${esc((s.url || '').slice(0, 55))}</a></td><td>${esc((s.fetched_at || '').slice(0, 16).replace('T', ' '))}</td><td>${s.chars || ''}</td></tr>`).join('') + `</table>` : '<p class="muted">なし</p>') +
+    `<h3 style="margin:14px 0 4px">適用レギュレーション（${d.regulations.length}件）</h3>` +
+    d.regulations.slice(0, 20).map((c) =>
+      `<div class="chunk"><div class="ctx"><span class="tier-${c.tier === 'client_official' ? 'official' : 'inferred'}">${c.tier === 'client_official' ? '公式' : '推定'}</span> ${esc(c.context)}</div><pre>${esc(c.text)}</pre></div>`).join('') +
+    (d.regulations.length > 20 ? `<p class="muted">…他 ${d.regulations.length - 20}件（レギュレーションタブで商材ID検索）</p>` : '');
+  $('#drawer').classList.add('on');
 }
 
 function renderChunks(el, rows) {
   el.innerHTML = rows.length ? rows.map((c) =>
-    `<div class="chunk"><div class="ctx"><span class="tier-${c.tier === 'client_official' ? 'official' : 'inferred'}">${c.tier === 'client_official' ? '公式' : '推定'}</span> ${c.context}</div><pre>${esc(c.text)}</pre></div>`
-  ).join('') : '<p class="muted">該当なし</p>';
+    `<div class="chunk"><div class="ctx"><span class="tier-${c.tier === 'client_official' ? 'official' : 'inferred'}">${c.tier === 'client_official' ? '公式' : '推定'}</span> ${esc(c.context)}</div><pre>${esc(c.text)}</pre></div>`).join('') : '<p class="muted">該当なし</p>';
 }
-function esc(s) { return String(s).replace(/[&<>]/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])); }
-
 async function loadReg() {
   const q = encodeURIComponent($('#rq').value.trim());
   const pid = encodeURIComponent($('#rpid').value.trim());
   const src = encodeURIComponent($('#rsrc').value);
   renderChunks($('#rlist'), await j(`/api/regstore?q=${q}&product=${pid}&source=${src}`));
+}
+
+async function runCompare() {
+  const ids = [...document.querySelectorAll('#cmpsel input:checked')].map((x) => x.value);
+  if (!ids.length) return;
+  const d = await j('/api/compare?ids=' + ids.join(','));
+  $('#cmpout').innerHTML = `<table><tr><th>項目</th>${d.columns.map((c) => `<th>${esc(c.name)}</th>`).join('')}</tr>` +
+    d.keys.map((k) => `<tr><td><b>${esc(k.label)}</b></td>` + d.columns.map((c) => {
+      const cell = c.cells[k.key];
+      return `<td>${esc(cell.human)}${cell.conditions.length ? `<div class="muted">※${cell.conditions.map(esc).join(' / ')}</div>` : ''}</td>`;
+    }).join('') + '</tr>').join('') + '</table>';
 }
 
 async function runCheck() {
@@ -130,17 +241,44 @@ async function runCheck() {
   } catch (e) { $('#cstat').textContent = '実行失敗: ' + e; }
 }
 
+async function loadLaws() {
+  const rows = await j('/api/laws?q=' + encodeURIComponent($('#lq').value.trim()));
+  $('#llist').innerHTML = rows.length ? rows.map((a) =>
+    `<div class="chunk"><div class="ctx">${esc(a.law)} 第${esc(a.num)}条 ${esc(a.caption)}</div>` +
+    `<pre>${esc(a.text)}</pre><div class="muted"><a href="${a.source_url}" target="_blank">e-Gov原文</a></div></div>`).join('') : '<p class="muted">該当なし</p>';
+}
+
+async function sendChat() {
+  const q = $('#chatin').value.trim();
+  if (!q) return;
+  $('#chatin').value = '';
+  CHAT.push({ role: 'user', content: q });
+  $('#chatlog').innerHTML += `<div class="msg user">${esc(q)}</div>`;
+  $('#chatstat').textContent = '保持データを照会中…';
+  try {
+    const res = await j('/api/chat', { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ messages: CHAT }) });
+    const reply = res.reply || res.error || '(no reply)';
+    CHAT.push({ role: 'assistant', content: reply });
+    $('#chatlog').innerHTML += `<div class="msg ai">${esc(reply)}</div>`;
+    $('#chatstat').textContent = '';
+  } catch (e) { $('#chatstat').textContent = '失敗: ' + e; }
+}
+
 (async () => {
   PRODUCTS = await j('/api/products');
   const types = [...new Set(PRODUCTS.map((p) => p.type))];
   $('#ptype').innerHTML += types.map((t) => `<option>${t}</option>`).join('');
   ['pq', 'ptype', 'pstatus'].forEach((id) => $('#' + id).oninput = renderProducts);
   renderProducts();
+  $('#cmpsel').innerHTML = PRODUCTS.filter((p) => p.status === 'active').map((p) =>
+    `<label style="display:block"><input type="checkbox" value="${p.product_id}"> ${esc(p.name)}</label>`).join('');
   const sources = await j('/api/sources');
-  $('#rsrc').innerHTML += sources.map((s) => `<option value="${s.source}">[${s.tier === 'client_official' ? '公式' : '推定'}] ${s.source} (${s.chunks})</option>`).join('');
+  $('#rsrc').innerHTML += sources.map((s) => `<option value="${esc(s.source)}">[${s.tier === 'client_official' ? '公式' : '推定'}] ${esc(s.source)} (${s.chunks})</option>`).join('');
   const snap = await j('/api/snapshot');
-  $('#sinfo').textContent = `snapshot保有: ${snap.products_with_snapshots}商材 / ${snap.pages}ページ / 最新ダイジェスト: ${snap.digest_file || 'なし'}`;
+  $('#sinfo').textContent = `snapshot保有: ${snap.products_with_snapshots}商材 / ${snap.pages}ページ / 最新: ${snap.digest_file || '-'} / pipeline: ${snap.pipeline_log || '-'}`;
   if (snap.digest) $('#sdigest').textContent = snap.digest;
+  if (snap.pipeline_tail) $('#spipe').textContent = snap.pipeline_tail;
 })();
 </script>
 </body>
