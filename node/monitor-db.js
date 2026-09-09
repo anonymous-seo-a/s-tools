@@ -27,8 +27,28 @@ function getDB() {
   db.pragma('synchronous = NORMAL');
   db.pragma('foreign_keys = ON');
   initSchema(db);
+  migrateSchema(db);
   reconcileStaleJobs(db);
   return db;
+}
+
+// 追加カラムの冪等マイグレーション (CREATE TABLE IF NOT EXISTS は既存テーブルに列を足さない)。
+//   daily_metrics.rank_mobile / click_mobile / impr_mobile:
+//     device=MOBILE 限定の GSC 値。全端末の rank はデスクトップ bot impression で実勢より
+//     悪く出るため、候補選定・効果測定は rank_mobile を優先参照する (monitor-collectors 参照)。
+//     旧行は NULL のまま = 消費側は COALESCE(rank_mobile, rank) で後方互換。
+const DAILY_METRICS_EXTRA_COLUMNS = [
+  ['rank_mobile', 'REAL'],
+  ['click_mobile', 'INTEGER'],
+  ['impr_mobile', 'INTEGER'],
+];
+function migrateSchema(d) {
+  const cols = new Set(d.prepare('PRAGMA table_info(daily_metrics)').all().map((c) => c.name));
+  for (const [name, type] of DAILY_METRICS_EXTRA_COLUMNS) {
+    if (cols.has(name)) continue;
+    d.exec(`ALTER TABLE daily_metrics ADD COLUMN ${name} ${type}`);
+    console.log(`[monitor-db] migrated: daily_metrics.${name} added`);
+  }
 }
 
 // プロセス再起動時、前回クラッシュで status='running' のまま残った collection_jobs を
@@ -186,52 +206,39 @@ function listAllArticles() {
 // ============================================================
 // daily_metrics
 // ============================================================
-function upsertDailyMetric({ post_id, date, source = 'gsc_ga4', rank, gsc_click, impressions, ctr, pv, aff_click }) {
-  const d = getDB();
-  d.prepare(`
-    INSERT INTO daily_metrics (post_id, date, source, rank, gsc_click, impressions, ctr, pv, aff_click)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+const DAILY_METRICS_UPSERT_SQL = `
+    INSERT INTO daily_metrics
+      (post_id, date, source, rank, gsc_click, impressions, ctr, pv, aff_click, rank_mobile, click_mobile, impr_mobile)
+    VALUES
+      (@post_id, @date, @source, @rank, @gsc_click, @impressions, @ctr, @pv, @aff_click, @rank_mobile, @click_mobile, @impr_mobile)
     ON CONFLICT(post_id, date, source) DO UPDATE SET
       rank = COALESCE(excluded.rank, daily_metrics.rank),
       gsc_click = COALESCE(excluded.gsc_click, daily_metrics.gsc_click),
       impressions = COALESCE(excluded.impressions, daily_metrics.impressions),
       ctr = COALESCE(excluded.ctr, daily_metrics.ctr),
       pv = COALESCE(excluded.pv, daily_metrics.pv),
-      aff_click = COALESCE(excluded.aff_click, daily_metrics.aff_click)
-  `).run(
-    post_id,
-    date,
-    source,
-    rank ?? null,
-    gsc_click ?? null,
-    impressions ?? null,
-    ctr ?? null,
-    pv ?? null,
-    aff_click ?? null,
-  );
+      aff_click = COALESCE(excluded.aff_click, daily_metrics.aff_click),
+      rank_mobile = COALESCE(excluded.rank_mobile, daily_metrics.rank_mobile),
+      click_mobile = COALESCE(excluded.click_mobile, daily_metrics.click_mobile),
+      impr_mobile = COALESCE(excluded.impr_mobile, daily_metrics.impr_mobile)
+`;
+const DAILY_METRICS_DEFAULTS = {
+  source: 'gsc_ga4',
+  rank: null, gsc_click: null, impressions: null, ctr: null, pv: null, aff_click: null,
+  rank_mobile: null, click_mobile: null, impr_mobile: null,
+};
+
+function upsertDailyMetric(record) {
+  getDB().prepare(DAILY_METRICS_UPSERT_SQL).run({ ...DAILY_METRICS_DEFAULTS, ...record });
 }
 
 function bulkUpsertDailyMetrics(records) {
   const d = getDB();
-  const stmt = d.prepare(`
-    INSERT INTO daily_metrics (post_id, date, source, rank, gsc_click, impressions, ctr, pv, aff_click)
-    VALUES (@post_id, @date, @source, @rank, @gsc_click, @impressions, @ctr, @pv, @aff_click)
-    ON CONFLICT(post_id, date, source) DO UPDATE SET
-      rank = COALESCE(excluded.rank, daily_metrics.rank),
-      gsc_click = COALESCE(excluded.gsc_click, daily_metrics.gsc_click),
-      impressions = COALESCE(excluded.impressions, daily_metrics.impressions),
-      ctr = COALESCE(excluded.ctr, daily_metrics.ctr),
-      pv = COALESCE(excluded.pv, daily_metrics.pv),
-      aff_click = COALESCE(excluded.aff_click, daily_metrics.aff_click)
-  `);
+  const stmt = d.prepare(DAILY_METRICS_UPSERT_SQL);
   const tx = d.transaction(rows => {
     let n = 0;
     for (const r of rows) {
-      stmt.run({
-        source: 'gsc_ga4',
-        rank: null, gsc_click: null, impressions: null, ctr: null, pv: null, aff_click: null,
-        ...r,
-      });
+      stmt.run({ ...DAILY_METRICS_DEFAULTS, ...r });
       n++;
     }
     return n;

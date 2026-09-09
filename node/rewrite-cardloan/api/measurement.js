@@ -105,6 +105,73 @@ function computeMeasurements() {
         ORDER BY date
       `);
       const dateAdd = m.prepare('SELECT date(?, ?) AS d');
+      // 実勢順位 (device=MOBILE, impression 加重)。全端末 rank はデスクトップ bot impression で
+      // 実勢より悪く出る。旧行 (2026-09 以前の未 backfill 分) は NULL → 表示は全端末 rank のまま。
+      const mobileRankStmt = m.prepare(`
+        SELECT SUM(rank_mobile * impr_mobile) / NULLIF(SUM(impr_mobile), 0) AS avgRank,
+               COUNT(rank_mobile) AS days
+        FROM daily_metrics
+        WHERE post_id = ? AND date BETWEEN ? AND ? AND rank_mobile IS NOT NULL
+      `);
+
+      // 照合対照 DiD (差分の差分)。
+      //   同一記事の前後比較も同ジャンル市場平均の β 補正も、ハブ記事の季節変動とロングテール記事の
+      //   挙動を混同する。証券148本 (2026-06 適用) の検証: 適用群クリック 後/前 = 0.87、証券全体 0.68 で
+      //   「効いて見えた」が、同規模 (同クリック帯×同順位帯) の未適用記事は 0.99 = 効果なし。
+      //   対照 = 同ジャンル・未適用・適用前28日のクリック/日が当該記事の 0.5〜2倍・実勢順位 ±4 以内。
+      //   DiD = (記事 後/前) ÷ (対照 後/前)。1.0 が効果なし。人の行動 = クリックで判定する
+      //   (bot は impression/順位を汚すがクリックしない)。
+      const appliedPostIds = new Set(sessions.map((s) => s.post_id));
+      const cohortStmt = m.prepare(`
+        SELECT mm.post_id,
+               SUM(CASE WHEN mm.date BETWEEN @preStart AND @preEnd THEN COALESCE(mm.gsc_click, 0) ELSE 0 END) AS pre_clicks,
+               SUM(CASE WHEN mm.date BETWEEN @postStart AND @postEnd THEN COALESCE(mm.gsc_click, 0) ELSE 0 END) AS post_clicks,
+               SUM(CASE WHEN mm.date BETWEEN @preStart AND @preEnd
+                        THEN COALESCE(mm.rank_mobile, mm.rank) * COALESCE(mm.impr_mobile, mm.impressions, 0) ELSE 0 END)
+                 / NULLIF(SUM(CASE WHEN mm.date BETWEEN @preStart AND @preEnd
+                                   THEN COALESCE(mm.impr_mobile, mm.impressions, 0) ELSE 0 END), 0) AS pre_rank
+        FROM daily_metrics mm
+        JOIN articles a ON a.post_id = mm.post_id
+        WHERE a.category = @genre AND mm.date BETWEEN @preStart AND @postEnd
+        GROUP BY mm.post_id
+      `);
+      const cohortCache = new Map(); // genre|preStart|postStart|postEnd → Map(post_id → row)
+      const loadCohort = (genre, preStart, preEnd, postStart, postEnd) => {
+        const key = `${genre}|${preStart}|${postStart}|${postEnd}`;
+        let c = cohortCache.get(key);
+        if (!c) {
+          c = new Map(cohortStmt.all({ genre, preStart, preEnd, postStart, postEnd }).map((r) => [r.post_id, r]));
+          cohortCache.set(key, c);
+        }
+        return c;
+      };
+      const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000) + 1;
+      const matchedControlDiD = (s, preStart, preEnd, postStart, postEnd) => {
+        if (!postEnd || postEnd < postStart) return null;
+        const cohort = loadCohort(s.genre, preStart, preEnd, postStart, postEnd);
+        const me = cohort.get(s.post_id);
+        if (!me || !me.pre_clicks) return null;
+        const preDays = daysBetween(preStart, preEnd);
+        const postDays = daysBetween(postStart, postEnd);
+        const lo = me.pre_clicks * 0.5, hi = me.pre_clicks * 2;
+        let cPre = 0, cPost = 0, n = 0;
+        for (const r of cohort.values()) {
+          if (appliedPostIds.has(r.post_id) || r.post_id === s.post_id) continue;
+          if (!(r.pre_clicks >= lo && r.pre_clicks <= hi)) continue;
+          if (me.pre_rank != null && r.pre_rank != null && Math.abs(r.pre_rank - me.pre_rank) > 4) continue;
+          cPre += r.pre_clicks; cPost += r.post_clicks; n++;
+        }
+        const tRatio = (me.post_clicks / postDays) / (me.pre_clicks / preDays);
+        const cRatio = n > 0 && cPre > 0 ? (cPost / postDays) / (cPre / preDays) : null;
+        return {
+          click_per_day_before: Number((me.pre_clicks / preDays).toFixed(3)),
+          click_per_day_after: Number((me.post_clicks / postDays).toFixed(3)),
+          click_ratio: Number(tRatio.toFixed(3)),
+          control_n: n,
+          control_click_ratio: cRatio != null ? Number(cRatio.toFixed(3)) : null,
+          did_clicks: cRatio ? Number((tRatio / cRatio).toFixed(3)) : null,
+        };
+      };
 
       // 交絡 (地合い変動) シグナルを scope別に一括ロード。無ければ null = graceful skip。
       let shiftByScope = null; // Map: scope -> Set(date)
@@ -142,6 +209,11 @@ function computeMeasurements() {
         const yAfter = yahooAggStmt.get(s.post_id, postStart, latestYahoo || s.applied_date);
         const yahooBefore = yBefore.avgRank != null ? Number(yBefore.avgRank.toFixed(1)) : null;
         const yahooAfter = yAfter.avgRank != null ? Number(yAfter.avgRank.toFixed(1)) : null;
+        const mBefore = mobileRankStmt.get(s.post_id, preStart, preEnd);
+        const mAfter = mobileRankStmt.get(s.post_id, postStart, latest || s.applied_date);
+        const mobileBefore = mBefore.avgRank != null ? Number(mBefore.avgRank.toFixed(1)) : null;
+        const mobileAfter = mAfter.avgRank != null ? Number(mAfter.avgRank.toFixed(1)) : null;
+        const did = latest ? matchedControlDiD(s, preStart, preEnd, postStart, latest) : null;
         // afクリック before/after（収益アクション）。rank と逆で「多いほど良い」。
         const affBefore = affAggStmt.get(s.post_id, preStart, preEnd);
         const affAfter = affAggStmt.get(s.post_id, postStart, latest || s.applied_date);
@@ -221,6 +293,16 @@ function computeMeasurements() {
           yahoo_delta: yahooBefore != null && yahooAfter != null
             ? Number((yahooBefore - yahooAfter).toFixed(1)) : null,
           yahoo_days_after: yAfter.days,
+          // 実勢順位 (モバイル限定)。null = 未 backfill 行のみの期間。
+          rank_mobile_before: mobileBefore,
+          rank_mobile_after: mobileAfter,
+          rank_mobile_delta: mobileBefore != null && mobileAfter != null
+            ? Number((mobileBefore - mobileAfter).toFixed(1)) : null,
+          // 照合対照 DiD (クリック)。did_clicks 1.0 = 同規模の未適用記事と同じ動き = 効果なし。
+          ...(did || {
+            click_per_day_before: null, click_per_day_after: null, click_ratio: null,
+            control_n: 0, control_click_ratio: null, did_clicks: null,
+          }),
           // afクリック（台帳直結＝真実の源）。多いほど良い → delta 正 = 改善。
           aff_before: affSumBefore,
           aff_after: affSumAfter,

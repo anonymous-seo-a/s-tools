@@ -41,6 +41,9 @@ async function collectRange(startDate, endDate) {
       gsc_click: r.gsc_click,
       impressions: r.impressions,
       ctr: r.ctr,
+      rank_mobile: r.rank_mobile,
+      click_mobile: r.click_mobile,
+      impr_mobile: r.impr_mobile,
       _url: r.url,
       _category: r.category,
     });
@@ -119,6 +122,9 @@ async function collectRange(startDate, endDate) {
     ctr: r.ctr ?? null,
     pv: r.pv ?? null,
     aff_click: r.aff_click ?? null,
+    rank_mobile: r.rank_mobile ?? null,
+    click_mobile: r.click_mobile ?? null,
+    impr_mobile: r.impr_mobile ?? null,
   }));
   const inserted = db.bulkUpsertDailyMetrics(toInsert);
 

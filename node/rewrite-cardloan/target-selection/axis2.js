@@ -5,9 +5,15 @@ const { open, attachMonitorReadOnly, detachMonitor, MONITOR_DB_PATH } = require(
 
 const DEFAULT_PERIOD_DAYS = 28;
 
+// 順位ギャップ係数: 「上げ代」の大きさ。
+//   入力は rank_mobile (無ければ rank)。全端末 rank はデスクトップ bot impression で実勢より
+//   悪く出るため、既に上位にいる記事を「2頁目の候補」と誤認する (証券148本の効果測定:
+//   選定時に全端末≤5位は 0% だったが実勢モバイルでは 20% が≤5位で、それらは適用後 0.77 と
+//   最も伸びなかった。10-20位帯は 1.13)。≤5位は上げ代が小さく下げリスクが勝つので低係数。
 function positionGapFactor(rank) {
   if (rank == null) return 0;
   if (rank <= 3) return 0.1;
+  if (rank <= 5) return 0.3;
   if (rank <= 10) return 1.0;
   if (rank <= 20) return 0.7;
   if (rank <= 50) return 0.3;
@@ -29,8 +35,9 @@ function calculateAxis2({ asOf = new Date(), periodDays = DEFAULT_PERIOD_DAYS } 
   const start = new Date(end);
   start.setDate(start.getDate() - (periodDays - 1));
 
+  // rank_mobile / impr_mobile は 2026-09 追加列。旧行 (NULL) は全端末値で後方互換。
   const rows = conn.prepare(`
-    SELECT post_id, date, rank, impressions
+    SELECT post_id, date, rank, impressions, rank_mobile, impr_mobile
     FROM monitor.daily_metrics
     WHERE date >= ? AND date <= ?
       AND impressions IS NOT NULL
@@ -39,7 +46,8 @@ function calculateAxis2({ asOf = new Date(), periodDays = DEFAULT_PERIOD_DAYS } 
 
   const agg = new Map();
   for (const r of rows) {
-    const f = positionGapFactor(r.rank);
+    const rank = r.rank_mobile != null ? r.rank_mobile : r.rank;
+    const f = positionGapFactor(rank);
     const contrib = r.impressions * f;
     let bucket = agg.get(r.post_id);
     if (!bucket) {
@@ -49,6 +57,8 @@ function calculateAxis2({ asOf = new Date(), periodDays = DEFAULT_PERIOD_DAYS } 
         sum_impressions: 0,
         weighted_position_sum: 0,
         impression_weighted_position_sum: 0,
+        mobile_impressions: 0,
+        mobile_position_sum: 0,
         days_with_data: 0,
       };
       agg.set(r.post_id, bucket);
@@ -57,6 +67,10 @@ function calculateAxis2({ asOf = new Date(), periodDays = DEFAULT_PERIOD_DAYS } 
     bucket.sum_impressions += r.impressions;
     bucket.weighted_position_sum += r.rank;
     bucket.impression_weighted_position_sum += r.rank * r.impressions;
+    if (r.rank_mobile != null && r.impr_mobile) {
+      bucket.mobile_impressions += r.impr_mobile;
+      bucket.mobile_position_sum += r.rank_mobile * r.impr_mobile;
+    }
     bucket.days_with_data += 1;
   }
 
@@ -70,6 +84,9 @@ function calculateAxis2({ asOf = new Date(), periodDays = DEFAULT_PERIOD_DAYS } 
       avg_position: b.days_with_data ? b.weighted_position_sum / b.days_with_data : null,
       impression_weighted_avg_position:
         b.sum_impressions ? b.impression_weighted_position_sum / b.sum_impressions : null,
+      // 実勢順位 (モバイル限定・impression 加重)。係数計算はこちらを使う。
+      mobile_weighted_avg_position:
+        b.mobile_impressions ? b.mobile_position_sum / b.mobile_impressions : null,
       days_with_data: b.days_with_data,
       window_start: isoDate(start),
       window_end: isoDate(end),

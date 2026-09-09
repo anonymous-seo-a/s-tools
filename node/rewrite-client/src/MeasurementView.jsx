@@ -156,6 +156,7 @@ export default function MeasurementView({ showToast }) {
                 <th colSpan={2}>GSC 確定 (前28d → 後)</th>
                 <th colSpan={2}>Yahoo 速報 (前28d → 後)</th>
                 <th colSpan={2} title="台帳直結。記事→アフィリンクのクリック=収益アクション。多いほど良い。">afクリック/日 (前28d → 後)</th>
+                <th colSpan={2} title="照合対照DiD: 同ジャンル・未適用・適用前クリック0.5〜2倍・実勢順位±4の記事群と比べた「後/前」の比。×1.00=同規模記事と同じ動き=効果なし。地合い(ハブ記事の季節変動)に騙されない主指標。">GSCクリック/日 (前28d → 後)</th>
                 <th rowSpan={2} className="meas-th-spark">
                   推移 <span className="meas-legend"><i className="lg-gsc">―GSC</i> <i className="lg-yahoo">--Yahoo</i></span>
                 </th>
@@ -164,6 +165,7 @@ export default function MeasurementView({ showToast }) {
                 <th>順位</th><th>Δ</th>
                 <th>順位</th><th>Δ</th>
                 <th>件/日</th><th>Δ</th>
+                <th>件/日</th><th>対照比 DiD</th>
               </tr>
             </thead>
             <tbody>
@@ -187,6 +189,11 @@ export default function MeasurementView({ showToast }) {
                   <td className="meas-date">{it.applied_date}</td>
                   <td className="meas-rank">
                     <RankPair before={it.rank_before} after={it.rank_after} waiting={it.days_after === 0} />
+                    {it.rank_mobile_before != null && (
+                      <span className="meas-days" title="実勢順位 (モバイル限定・impression加重)。全端末はデスクトップbot impressionで実勢より悪く出る。">
+                        SP {it.rank_mobile_before}→{it.rank_mobile_after != null ? it.rank_mobile_after : '—'}
+                      </span>
+                    )}
                     <span className="meas-days">{it.days_after > 0 ? `${it.days_after}日計測` : ''}</span>
                   </td>
                   <td className="meas-deltacell">
@@ -232,6 +239,25 @@ export default function MeasurementView({ showToast }) {
                     )}
                   </td>
                   <td className="meas-deltacell"><DeltaCell delta={it.aff_per_day_delta} digits={2} /></td>
+                  <td className="meas-rank">
+                    <RankPair before={it.click_per_day_before} after={it.click_per_day_after} waiting={false} digits={2} />
+                  </td>
+                  <td className="meas-deltacell">
+                    {it.did_clicks != null ? (
+                      <span
+                        title={`記事 後/前 ×${it.click_ratio} ÷ 対照 後/前 ×${it.control_click_ratio} (対照 ${it.control_n} 記事)`}
+                        style={{
+                          fontWeight: 600,
+                          color: it.did_clicks >= 1.15 ? '#2e7d32' : it.did_clicks <= 0.85 ? '#c62828' : '#888',
+                        }}
+                      >
+                        ×{it.did_clicks.toFixed(2)}
+                        <span className="meas-days" style={{ display: 'block', fontWeight: 400 }}>対照{it.control_n}件</span>
+                      </span>
+                    ) : (
+                      <span className="meas-days">{it.click_per_day_before ? '対照なし' : '—'}</span>
+                    )}
+                  </td>
                   <td className="meas-spark">
                     <Sparkline series={it.series} yahooSeries={it.yahoo_series} appliedDate={it.applied_date} />
                   </td>

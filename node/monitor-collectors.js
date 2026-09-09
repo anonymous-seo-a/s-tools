@@ -75,43 +75,76 @@ function parseUrl(url) {
 // ============================================================
 // GSC: URL × 日付 単位のメトリクス（rank / clicks / impressions / ctr）
 // ============================================================
-async function fetchGscDaily(startDate, endDate) {
-  const auth = authClient();
-  const sc = google.searchconsole({ version: 'v1', auth });
-  const rows = [];
-  let startRow = 0;
+//   GSC の page 次元は同一記事でも `#ez-toc-N` 等のアンカー付き URL(サイトリンク)が別行になる。
+//   parseUrl で正規化すると (post_id, date) が重複するため、ここで合算する:
+//     clicks/impressions = 合計、position = impression 加重平均、ctr = clicks/impressions。
+//   (旧実装は後勝ち上書きで、サイトリンク保有記事の rank/imp が任意のアンカー行の値になっていた)
+//
+//   加えて device=MOBILE 限定の rank/clicks/impressions を並行取得する。
+//   デスクトップには順位チェックツール等の bot impression が深い順位で大量に混入し、
+//   全端末の impression 加重順位は実勢(人間=モバイル)より 3〜10 位悪く出る
+//   (証券148本の効果測定で判明: 全端末中央値12.2 vs モバイル8.5、上位5位以内の記事20%を
+//   「2頁目の候補」と誤認して選定していた)。選定・効果測定は rank_mobile を優先参照する。
+async function queryGscPageDate(sc, startDate, endDate, { device = null } = {}) {
   const batchSize = 25000;
-
+  const agg = new Map(); // post_id|date → {clicks, impressions, posW, parsed}
+  let startRow = 0;
   while (true) {
-    const res = await sc.searchanalytics.query({
-      siteUrl: GSC_SITE_URL,
-      requestBody: {
-        startDate, endDate,
-        dimensions: ['page', 'date'],
-        rowLimit: batchSize,
-        startRow,
-      },
-    });
+    const requestBody = {
+      startDate, endDate,
+      dimensions: ['page', 'date'],
+      rowLimit: batchSize,
+      startRow,
+    };
+    if (device) {
+      requestBody.dimensionFilterGroups = [{
+        filters: [{ dimension: 'device', operator: 'equals', expression: device }],
+      }];
+    }
+    const res = await sc.searchanalytics.query({ siteUrl: GSC_SITE_URL, requestBody });
     const got = res.data.rows || [];
-    rows.push(...got);
+    for (const r of got) {
+      const [url, date] = r.keys;
+      const parsed = parseUrl(url);
+      if (!parsed) continue;
+      const key = `${parsed.post_id}|${date}`;
+      let b = agg.get(key);
+      if (!b) {
+        b = { parsed, date, clicks: 0, impressions: 0, posW: 0 };
+        agg.set(key, b);
+      }
+      b.clicks += r.clicks || 0;
+      b.impressions += r.impressions || 0;
+      b.posW += (r.position || 0) * (r.impressions || 0);
+    }
     if (got.length < batchSize) break;
     startRow += batchSize;
   }
+  return agg;
+}
+
+async function fetchGscDaily(startDate, endDate) {
+  const auth = authClient();
+  const sc = google.searchconsole({ version: 'v1', auth });
+
+  const all = await queryGscPageDate(sc, startDate, endDate);
+  const mobile = await queryGscPageDate(sc, startDate, endDate, { device: 'MOBILE' });
 
   const out = [];
-  for (const r of rows) {
-    const [url, date] = r.keys;
-    const parsed = parseUrl(url);
-    if (!parsed) continue;
+  for (const [key, b] of all) {
+    const m = mobile.get(key);
     out.push({
-      post_id: parsed.post_id,
-      category: parsed.category,
-      url: parsed.normalizedUrl,
-      date,
-      rank: r.position,
-      gsc_click: r.clicks,
-      impressions: r.impressions,
-      ctr: r.ctr,
+      post_id: b.parsed.post_id,
+      category: b.parsed.category,
+      url: b.parsed.normalizedUrl,
+      date: b.date,
+      rank: b.impressions ? b.posW / b.impressions : null,
+      gsc_click: b.clicks,
+      impressions: b.impressions,
+      ctr: b.impressions ? b.clicks / b.impressions : 0,
+      rank_mobile: m && m.impressions ? m.posW / m.impressions : null,
+      click_mobile: m ? m.clicks : 0,
+      impr_mobile: m ? m.impressions : 0,
     });
   }
   return out;
